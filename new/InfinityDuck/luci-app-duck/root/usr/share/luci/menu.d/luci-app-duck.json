@@ -1,0 +1,39 @@
+{
+	"admin/services/duck": {
+		"title": "InfinityDuck",
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-duck" ],
+			"fs": {
+				"/etc/init.d/duck": "executable"
+			},
+			"uci": { "duck": true }
+		}
+	},
+	"admin/services/duck/settings": {
+		"title": "Settings",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "duck/settings"
+		}
+	},
+	"admin/services/duck/config": {
+		"title": "Configuration",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "duck/config"
+		}
+	},
+	"admin/services/duck/log": {
+		"title": "Log",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "duck/log"
+		}
+	}
+}

@@ -1,0 +1,100 @@
+name: Debug SSH Connection
+
+on:
+  workflow_dispatch:
+    inputs:
+      vps_host:
+        description: 'VPS 地址'
+        required: true
+        default: '123.com'
+      vps_user:
+        description: 'VPS 用户名'
+        required: true
+        default: 'ubuntu'
+      remote_path:
+        description: 'VPS 远程目录'
+        required: true
+        default: '/home/ubuntu/openwrt_private'
+
+jobs:
+  test_sync:
+    runs-on: ubuntu-24.04
+    
+    steps:
+    - name: 1. 模拟本地仓库环境
+      run: |
+        # 模拟仓库里原本就有的文件
+        mkdir -p files/etc
+        touch files/etc/banner
+        
+        mkdir -p new/InfinityDuck
+        touch new/InfinityDuck/Makefile
+        
+        echo "CONFIG_PACKAGE_luci-app-local=y" > custom.config
+        
+        echo "=== [初始] 本地文件结构 ==="
+        ls -R files new
+        echo "=== [初始] custom.config 内容 ==="
+        cat custom.config
+
+    - name: 2. 配置 SSH 环境
+      env:
+        SSH_KEY: ${{ secrets.VPS_PRIVATE_KEY }}
+        VPS_HOST: ${{ inputs.vps_host }}
+      run: |
+        mkdir -p ~/.ssh
+        echo "$SSH_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H $VPS_HOST >> ~/.ssh/known_hosts
+        
+    - name: 3. 测试 SSH 连接
+      env:
+        VPS_HOST: ${{ inputs.vps_host }}
+        VPS_USER: ${{ inputs.vps_user }}
+      run: |
+        echo "正在尝试连接 $VPS_USER@$VPS_HOST ..."
+        ssh -i ~/.ssh/id_rsa $VPS_USER@$VPS_HOST "uname -a"
+        echo "连接成功！"
+
+    - name: 4. 执行同步 (模拟真实逻辑)
+      env:
+        VPS_HOST: ${{ inputs.vps_host }}
+        VPS_USER: ${{ inputs.vps_user }}
+        REMOTE_PATH: ${{ inputs.remote_path }}
+      run: |
+        echo ">>> 开始同步 files 目录..."
+        rsync -avz -e "ssh -i ~/.ssh/id_rsa" \
+          $VPS_USER@$VPS_HOST:$REMOTE_PATH/files/ files/
+          
+        echo ">>> 开始同步 new 源码目录..."
+        rsync -avz -e "ssh -i ~/.ssh/id_rsa" \
+          $VPS_USER@$VPS_HOST:$REMOTE_PATH/new/ new/
+          
+        echo ">>> 开始追加配置..."
+        # 只有当远程文件存在时才追加，防止报错
+        if ssh -i ~/.ssh/id_rsa $VPS_USER@$VPS_HOST "[ -f $REMOTE_PATH/private.config ]"; then
+            ssh -i ~/.ssh/id_rsa $VPS_USER@$VPS_HOST "cat $REMOTE_PATH/private.config" >> custom.config
+        else
+            echo "警告: VPS 上未找到 private.config，跳过追加。"
+        fi
+
+    - name: 5. 验证合并结果
+      run: |
+        echo "========================================="
+        echo "       同步后结果验证"
+        echo "========================================="
+        
+        echo "1. 查看 files 目录 (应包含本地+远程):"
+        ls -R files/
+        
+        echo ""
+        echo "2. 查看 new 目录 (应包含本地+远程):"
+        ls -R new/
+        
+        echo ""
+        echo "3. 查看 custom.config (应包含追加内容):"
+        cat custom.config
+        
+    - name: 清理密钥
+      if: always()
+      run: rm -f ~/.ssh/id_rsa
