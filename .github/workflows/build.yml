@@ -25,7 +25,7 @@ on:
       vps_host:
         description: 'VPS 地址 ( 必须IPv4地址/域名 )'
         required: false
-        default: 'amd.899957.xyz'
+        default: 'amd'
       vps_user:
         description: 'VPS 用户名'
         required: false
@@ -221,7 +221,14 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         # 4. 修复 Rust 编译报错 (必须加在 install 之后)
-        sed -i 's/download-ci-llvm = true/download-ci-llvm = "if-unchanged"/g' feeds/packages/lang/rust/Makefile
+        RUST_MAKEFILE="feeds/packages/lang/rust/Makefile"
+
+        if [ -f "$RUST_MAKEFILE" ]; then
+        echo "=== 正在修复 Rust 编译配置 ==="
+        # 策略A：修改 Makefile (使用宽松正则匹配空格)
+        sed -i -E 's/download-ci-llvm[[:space:]]*=[[:space:]]*true/download-ci-llvm = false/g' $RUST_MAKEFILE
+        fi
+        
         # 如果你需要伪造内核指纹，请在这里插入
         # Vermagic ------------------
         #latest_version="$(curl -s https://github.com/openwrt/openwrt/tags | grep -Eo "v[0-9\.]+\-*r*c*[0-9]*.tar.gz" | sed -n '/[2-9][5-9]/p' | sed -n 1p | sed 's/v//g' | sed 's/.tar.gz//g')"
@@ -447,7 +454,8 @@ jobs:
         echo -e "$(nproc) thread compile"
         df -hT
         # 优先多线程，失败自动转单线程调试
-        make -j$(nproc) || make -j1 V=s || find staging_dir/ -name *.bin
+        make -j$(nproc) || make -j1 V=s
+        echo "  ⚙️ 查找uboot文件"
         find staging_dir/ -name *.bin
         find staging_dir/ -name *.img
         find staging_dir/ -name *r4s*
