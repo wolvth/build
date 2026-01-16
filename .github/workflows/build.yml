@@ -212,11 +212,11 @@ jobs:
         rm -rf package/boot/uboot-rockchip
         rm -rf package/boot/arm-trusted-firmware-rockchip
         
-        git clone https://github.com/immortalwrt/immortalwrt.git /tmp/immortalwrt --depth 1 -b v24.10.4
-        cp -r /tmp/immortalwrt/package/boot/uboot-rockchip package/boot/
-        cp -r /tmp/immortalwrt/package/boot/arm-trusted-firmware-rockchip package/boot/
-        #git clone https://github.com/sbwml/package_boot_uboot-rockchip package/boot/uboot-rockchip -b v2023.04
-        #git clone https://github.com/sbwml/arm-trusted-firmware-rockchip package/boot/arm-trusted-firmware-rockchip -b 0419
+        #git clone https://github.com/immortalwrt/immortalwrt.git /tmp/immortalwrt --depth 1 -b v24.10.4
+        #cp -r /tmp/immortalwrt/package/boot/uboot-rockchip package/boot/
+        #cp -r /tmp/immortalwrt/package/boot/arm-trusted-firmware-rockchip package/boot/
+        git clone https://github.com/sbwml/package_boot_uboot-rockchip package/boot/uboot-rockchip -b v2023.04
+        git clone https://github.com/sbwml/arm-trusted-firmware-rockchip package/boot/arm-trusted-firmware-rockchip -b 0419
 
         ./scripts/feeds update -a
         ./scripts/feeds install -a
