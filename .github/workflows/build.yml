@@ -143,14 +143,15 @@ jobs:
         ssh $SSH_OPTS $VPS_USER@$VPS_HOST "bash $REMOTE_PATH/rsync.sh > /dev/null"
         echo "[OK] remote script done"
         rsync -az --quiet -e "ssh $SSH_OPTS" \
-          $VPS_USER@$VPS_HOST:$REMOTE_PATH/files/ files/
-        rsync -avz --quiet -e "ssh $SSH_OPTS" \
-          $VPS_USER@$VPS_HOST:$REMOTE_PATH/uci-defaults/ files/etc/uci-defaults/
-          
+          $VPS_USER@$VPS_HOST:$REMOTE_PATH/files/ files/          
         echo " 🛻 files 目录同步完成，当前 content:"
         ls -F files/
         ls -F files/etc/
-        ls -F files/root/
+        ls -laF files/root/
+        
+        echo " 🛻 同步uci-defaults"
+        rsync -avz -e "ssh $SSH_OPTS" \
+          $VPS_USER@$VPS_HOST:$REMOTE_PATH/uci-defaults/ files/etc/uci-defaults/
         ls -F files/etc/uci-default/
 
         # 3. 同步 new 源码目录 (覆盖/合并)
