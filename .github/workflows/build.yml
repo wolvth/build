@@ -468,12 +468,24 @@ jobs:
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: Upload Firmware
+    - name: Encrypt Firmware
+      id: encrypt
+      if: steps.organize.outputs.status == 'success'
+      run: |
+        sudo apt-get install -y p7zip-full
+        ENCRYPT_NAME="OpenWrt_Secure_${{ inputs.version }}.7z"
+
+        7z a -t7z -mhe=on -p"${{ secrets.FIRMWARE_PASSWORD }}" "$ENCRYPT_NAME" ${{ env.FIRMWARE }}/*
+        mkdir -p upload_out
+        mv "$ENCRYPT_NAME" upload_out/
+        echo "SECURE_DIR=$PWD/upload_out" >> $GITHUB_ENV
+
+    - name: Upload Firmware Artifact
       uses: actions/upload-artifact@v4
       if: steps.organize.outputs.status == 'success' && inputs.upload_release != true
       with:
-        name: OpenWrt_Firmware_${{ inputs.config_file }}
-        path: ${{ env.FIRMWARE }}
+        name: OpenWrt_Encrypted_Artifact
+        path: ${{ env.SECURE_DIR }}/*
         retention-days: 3
 
     - name: Generate Release Tag
@@ -481,7 +493,8 @@ jobs:
       if: inputs.upload_release == true && steps.organize.outputs.status == 'success'
       run: |
         echo "release_tag=${{ inputs.version }}-$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
-        echo "## OpenWrt Auto Build" > release.txt
+        echo "## OpenWrt Auto Build (Encrypted)" > release.txt
+        echo "⚠️ **此固件已加密 / Firmware is encrypted**" >> release.txt
         echo "* Platform: ${{ inputs.platform }}" >> release.txt
         echo "* Version: ${{ inputs.version }}" >> release.txt
         echo "* Build Date: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
@@ -494,4 +507,6 @@ jobs:
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
+        # 关键修改：指向加密后的目录
+        files: ${{ env.SECURE_DIR }}/*
+
