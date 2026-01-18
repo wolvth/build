@@ -465,40 +465,37 @@ jobs:
       working-directory: ./openwrt
       id: compile_uboot
       run: |
-        echo "🚀 基础环境就绪，开始编译 U-Boot..."
+        echo "🚀 开始编译 U-Boot..."
+        make package/boot/uboot-rockchip/compile V=s -j$(nproc)
         
-        # 此时 toolchain 已好，可以直接编译 uboot
-        make package/boot/uboot-rockchip/compile V=s -j1
+        echo "🔎 [Debug] 检查生成的文件..."
+        ls -lh staging_dir/target-aarch64_generic_musl/image/
         
-        echo "🔎 [Debug] 查找生成的 U-Boot 文件..."
-        # 列出所有生成的文件，方便排查
-        find build_dir/target-aarch64_generic_musl/ -name "*rockchip*"
-        find staging_dir/target-aarch64_generic_musl/image/ -name "*uboot*"
-        ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
-        
-        # --- 自动改名修复逻辑 ---
+        # --- 针对 NanoPi R4S 的专门修复逻辑 ---
         IMG_DIR="staging_dir/target-aarch64_generic_musl/image"
         
-        # 定义可能的源文件名（根据 sbwml 仓库的情况，可能是 u-boot-rockchip.bin）
-        # 定义目标文件名（OpenWrt 官方打包脚本死板要求的名字）
-        SRC_NAME="u-boot-rockchip.bin"
-        TARGET_NAME="nanopi-r4s-rk3399-u-boot-rockchip.bin"
+        # 1. 定义生成出来的“实际”文件名
+        SRC_FILE="$IMG_DIR/nanopi-r4s-rk3399-uboot.img"
         
-        if [ -f "$IMG_DIR/$SRC_NAME" ]; then
-            echo "✅ 检测到通用名文件: $SRC_NAME"
-            echo "🔄 正在重命名为: $TARGET_NAME"
-            cp -f "$IMG_DIR/$SRC_NAME" "$IMG_DIR/$TARGET_NAME"
-        else
-            echo "⚠️ 未找到 $SRC_NAME，尝试查找 idbloader.img 组合..."
-            # 有些新版可能生成的是 idbloader.img + u-boot.itb，如果需要那种格式，逻辑会更复杂
-            # 这里先假设生成的是 .bin
-        fi
+        # 2. 定义打包脚本“想要”的文件名 (根据之前的报错)
+        TARGET_FILE="$IMG_DIR/nanopi-r4s-rk3399-u-boot-rockchip.bin"
         
-        # 再次确认目标文件是否存在
-        if [ -f "$IMG_DIR/$TARGET_NAME" ]; then
-            echo "🎉 修复成功！文件已就绪。"
+        # 3. 执行复制改名
+        if [ -f "$SRC_FILE" ]; then
+            echo "✅ 找到源码生成的文件: $(basename $SRC_FILE)"
+            echo "🔄 正在复制并重命名为: $(basename $TARGET_FILE)"
+            cp -f "$SRC_FILE" "$TARGET_FILE"
+            
+            # 再次确认
+            if [ -f "$TARGET_FILE" ]; then
+                echo "🎉 修复完成！Target 文件已就绪。"
+            else
+                echo "🔴 复制失败，请检查权限。"
+                exit 1
+            fi
         else
-            echo "🔴 警告：目标文件仍未找到，下一步可能会报错。"
+            echo "🔴 严重错误：源码编译似乎成功了，但没找到 $SRC_FILE"
+            exit 1
         fi
         
     - name: Compile OpenWrt
