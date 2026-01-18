@@ -473,7 +473,8 @@ jobs:
         echo "🔎 [Debug] 查找生成的 U-Boot 文件..."
         # 列出所有生成的文件，方便排查
         find build_dir/target-aarch64_generic_musl/ -name "*u-boot*"
-        find staging_dir/target-aarch64_generic_musl/image/ -name "*u-boot*"
+        find staging_dir/target-aarch64_generic_musl/image/ -name "*uboot*"
+        ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
         
         # --- 自动改名修复逻辑 ---
         IMG_DIR="staging_dir/target-aarch64_generic_musl/image"
@@ -508,29 +509,16 @@ jobs:
         df -hT
         # 优先多线程，失败自动转单线程调试
         make -j$(nproc) || make -j1 V=s || {
-        echo "  ⚙️ 🔴 编译失败，执行查找测试..."
-        # --- 调试步骤开始 ---
-            
-        # A. 确认一下源码目录到底叫什么，防止眼花看错
-        echo "====== [Debug] 检查 package/boot 目录结构 ======"
-        ls -F package/boot/ | grep rockchip || echo "❌ 没找到任何带 rockchip 的目录"
-        
-        echo "====== [Debug] 查找 uboot-rockchip 产物 ======"
-        # 看看 build_dir 里有没有生成中间文件
-        find build_dir/ -name "*uboot-rockchip*" || true
-        
-        # C. 看看 staging_dir 里有没有安装好的文件（这是报错说找不到的地方）
-        echo "====== [Debug] 查找 staging_dir 里的 u-boot 文件 ======
-        find staging_dir/ -name "*uboot*"
-        find staging_dir/ -name "*u-boot*" || true
-        find staging_dir/ -name "*r4s*" || true
-        find staging_dir/ -name "*rockchip*" || true
-
-        # D. 列出 image 目录（dd 命令报错的地方）
-        echo "====== [Debug] image 目录详情 ======"
         ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
-            
-        # --- 调试步骤结束 ---    
+        echo "====== [Debug] 查找 uboot-rockchip 产物 ======"
+        find build_dir/ -name *uboot-rockchip* || true
+        
+        echo "====== [Debug] 查找 staging_dir 里的 u-boot 文件 ======"
+        find staging_dir/ -name *uboot*
+        find staging_dir/ -name *u-boot* || true
+        find staging_dir/ -name *r4s* || true
+        find staging_dir/ -name *rockchip* || true
+
         # 必须报错退出，否则 Action 会显示成功
         exit 1
         }
