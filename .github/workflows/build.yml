@@ -223,11 +223,11 @@ jobs:
         rm -rf package/boot/uboot-rockchip
         rm -rf package/boot/arm-trusted-firmware-rockchip
         
-        #git clone https://github.com/immortalwrt/immortalwrt.git /tmp/immortalwrt --depth 1 -b v24.10.4
-        #cp -r /tmp/immortalwrt/package/boot/uboot-rockchip package/boot/
-        #cp -r /tmp/immortalwrt/package/boot/arm-trusted-firmware-rockchip package/boot/
-        git clone https://github.com/sbwml/package_boot_uboot-rockchip package/boot/uboot-rockchip
-        git clone https://github.com/sbwml/arm-trusted-firmware-rockchip package/boot/arm-trusted-firmware-rockchip
+        git clone https://github.com/immortalwrt/immortalwrt.git /tmp/immortalwrt --depth 1 -b openwrt-25.12
+        cp -r /tmp/immortalwrt/package/boot/uboot-rockchip package/boot/
+        cp -r /tmp/immortalwrt/package/boot/arm-trusted-firmware-rockchip package/boot/
+        #git clone https://github.com/sbwml/package_boot_uboot-rockchip package/boot/uboot-rockchip
+        #git clone https://github.com/sbwml/arm-trusted-firmware-rockchip package/boot/arm-trusted-firmware-rockchip
 
         ./scripts/feeds update -a
         ./scripts/feeds install -a
@@ -471,32 +471,45 @@ jobs:
         make package/boot/uboot-rockchip/compile V=s -j$(nproc)
         
         echo "🔎 [Debug] 检查生成的文件..."
-        ls -lh staging_dir/target-aarch64_generic_musl/image/
-        
-        # --- 针对 NanoPi R4S 的专门修复逻辑 ---
         IMG_DIR="staging_dir/target-aarch64_generic_musl/image"
+        ls -lh $IMG_DIR/
         
-        # 1. 定义生成出来的“实际”文件名
-        SRC_FILE="$IMG_DIR/nanopi-r4s-rk3399-uboot.img"
+        # 定义源文件变量
+        FILE_IDB="$IMG_DIR/rk3399-idbloader.bin"
+        FILE_UBOOT="$IMG_DIR/nanopi-r4s-rk3399-uboot.img"
+        FILE_TRUST="$IMG_DIR/rk3399-trust.bin"
         
-        # 2. 定义打包脚本“想要”的文件名 (根据之前的报错)
+        # 定义目标文件（OpenWrt 官方脚本要求的那个名字）
         TARGET_FILE="$IMG_DIR/nanopi-r4s-rk3399-u-boot-rockchip.bin"
         
-        # 3. 执行复制改名
-        if [ -f "$SRC_FILE" ]; then
-            echo "✅ 找到源码生成的文件: $(basename $SRC_FILE)"
-            echo "🔄 正在复制并重命名为: $(basename $TARGET_FILE)"
-            cp -f "$SRC_FILE" "$TARGET_FILE"
+        echo "🔧 开始合成单个 u-boot-rockchip.bin 文件..."
+        
+        if [ -f "$FILE_IDB" ] && [ -f "$FILE_UBOOT" ]; then
+            # 1. 准备底包（以 idbloader 为基础，放在文件头部 0 偏移处）
+            cp -f "$FILE_IDB" "$TARGET_FILE"
             
-            # 再次确认
-            if [ -f "$TARGET_FILE" ]; then
-                echo "🎉 修复完成！Target 文件已就绪。"
+            # 2. 写入 uboot.img 到 8MB 处
+            # OpenWrt 写入 SD 卡是从 Sector 64 开始的。
+            # ImmortalWrt 要求 uboot 在 Sector 16384 (8MB)。
+            # 相对偏移量 = 16384 - 64 = 16320
+            echo "   正在合入 uboot.img (Seek 16320)..."
+            dd if="$FILE_UBOOT" of="$TARGET_FILE" bs=512 seek=16320 conv=notrunc
+            
+            # 3. 写入 trust.bin 到 12MB 处
+            # ImmortalWrt 要求 trust 在 Sector 24576 (12MB)。
+            # 相对偏移量 = 24576 - 64 = 24512
+            if [ -f "$FILE_TRUST" ]; then
+                echo "   正在合入 trust.bin (Seek 24512)..."
+                dd if="$FILE_TRUST" of="$TARGET_FILE" bs=512 seek=24512 conv=notrunc
             else
-                echo "🔴 复制失败，请检查权限。"
-                exit 1
+                echo "⚠️ 未发现独立 trust.bin，可能已包含在 uboot.img 中"
             fi
+            
+            echo "✅ 合成完成！"
+            ls -lh "$TARGET_FILE"
+            
         else
-            echo "🔴 严重错误：源码编译似乎成功了，但没找到 $SRC_FILE"
+            echo "🔴 严重错误：缺关键文件 (idbloader 或 uboot.img)！"
             exit 1
         fi
         
