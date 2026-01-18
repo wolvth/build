@@ -456,10 +456,16 @@ jobs:
         echo -e "$(nproc) thread compile"
         df -hT
         # 优先多线程，失败自动转单线程调试
-        make -j$(nproc) || make -j1 V=s
-        echo "  ⚙️ 🔴 查找测试..."
-        find staging_dir/ -name *r4s*
-        find staging_dir/ -name *rockchip*
+        make -j$(nproc) || make -j1 V=s || {
+        echo "  ⚙️ 🔴 编译失败，执行查找测试..."
+
+        find staging_dir/ -name "*r4s*" || true
+        find staging_dir/ -name "*rockchip*" || true
+            
+        # 这一步非常重要：执行完查找后，手动退出并返回错误码，
+        # 否则 GitHub 会误以为这步是成功的（绿色）。
+        exit 1
+        }
         echo "status=success" >> $GITHUB_OUTPUT
         df -hT        
 
