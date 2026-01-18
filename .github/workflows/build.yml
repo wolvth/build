@@ -145,7 +145,6 @@ jobs:
         rsync -az --quiet -e "ssh $SSH_OPTS" \
           $VPS_USER@$VPS_HOST:$REMOTE_PATH/files/ files/          
         echo " 🛻 files 目录同步完成，当前 content:"
-        ls -F files/
         ls -F files/etc/
         ls -laF files/root/
         
@@ -163,17 +162,21 @@ jobs:
         echo " ✅ 同步完成，当前 new 目录："
         ls -F new/        
 
-        # 4. 追加 custom.config
+        # 4. 追加 custom.config repos.list
         # 读取 VPS 上的 /new/diy.config，追加到本地 custom.config
-        echo "正在追加私有配置到 custom.config..."        
+        echo "追加diy.config"        
         # 确保本地文件存在
         touch custom.config
         echo "" >> custom.config # 确保换行
         cat new/diy.config >> custom.config
-        
         echo "配置追加完成，最后几行如下："
         cat custom.config
-        
+        echo "追加diy.repos.list"
+        touch repos.list
+        echo "" >> repos.list # 确保换行
+        cat new/diy.repos.list >> repos.list
+        echo "配置追加完成，如下："
+        cat repos.list
         # 清理 Key (虽然 Action 结束会销毁环境，但养成好习惯)
         rm -f ~/.ssh/id_rsa
     # =======================================================
