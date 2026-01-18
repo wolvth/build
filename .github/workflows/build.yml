@@ -459,6 +459,8 @@ jobs:
         make -j$(nproc) || make -j1 V=s || {
         echo "  ⚙️ 🔴 编译失败，执行查找测试..."
 
+        find staging_dir/ -name "*u-boot*" || true
+        ls -R staging_dir/target-aarch64_generic_musl/image/ || true
         find staging_dir/ -name "*r4s*" || true
         find staging_dir/ -name "*rockchip*" || true
             
