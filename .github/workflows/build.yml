@@ -472,7 +472,7 @@ jobs:
         
         echo "🔎 [Debug] 查找生成的 U-Boot 文件..."
         # 列出所有生成的文件，方便排查
-        find build_dir/target-aarch64_generic_musl/ -name "*u-boot*"
+        find build_dir/target-aarch64_generic_musl/ -name "*rockchip*"
         find staging_dir/target-aarch64_generic_musl/image/ -name "*uboot*"
         ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
         
