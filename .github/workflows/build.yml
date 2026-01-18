@@ -468,7 +468,7 @@ jobs:
         echo "🚀 基础环境就绪，开始编译 U-Boot..."
         
         # 此时 toolchain 已好，可以直接编译 uboot
-        make package/boot/uboot-rockchip/compile V=s -j$(nproc)
+        make package/boot/uboot-rockchip/compile V=s -j1
         
         echo "🔎 [Debug] 查找生成的 U-Boot 文件..."
         # 列出所有生成的文件，方便排查
