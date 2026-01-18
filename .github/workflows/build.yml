@@ -169,8 +169,10 @@ jobs:
         touch custom.config
         echo "" >> custom.config # 确保换行
         cat new/diy.config >> custom.config
-        echo "配置追加完成，最后几行如下："
+        echo "追加完成，最终custom.config"
+        echo "" >> custom.config
         cat custom.config
+        
         echo "追加diy.repos.list"
         touch repos.list
         echo "" >> repos.list # 确保换行
