@@ -492,12 +492,11 @@ jobs:
       id: compile_uboot
       run: |
         echo "🚀 开始编译 U-Boot..."
-        make package/boot/uboot-rockchip/compile V=s -j$(nproc)
+        make package/boot/uboot-rockchip/compile -j$(nproc) || make package/boot/uboot-rockchip/compile -j1 V=s
         
         echo "🔎 [Debug] 检查生成的文件..."
-        IMG_DIR="staging_dir/target-aarch64_generic_musl/image"
-        ls -lh $IMG_DIR/
-                
+        ls -lh staging_dir/target-aarch64_generic_musl/image/
+    
     - name: Compile OpenWrt
       working-directory: ./openwrt
       id: compile
@@ -520,6 +519,7 @@ jobs:
         exit 1
         }
         echo "status=success" >> $GITHUB_OUTPUT
+        ls -lh staging_dir/target-aarch64_generic_musl/image/
         df -hT        
 
     - name: Organize Files
