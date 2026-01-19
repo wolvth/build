@@ -220,17 +220,39 @@ jobs:
     - name: Update & Install Feeds
       working-directory: ./openwrt
       run: |
-        rm -rf package/boot/rkbin
         rm -rf package/boot/uboot-rockchip
         rm -rf package/boot/arm-trusted-firmware-rockchip
-        # rockchip - target - r4s/r5s only
+        rm -rf package/boot/rkbin
         rm -rf target/linux/rockchip/image
         
         git clone https://github.com/immortalwrt/immortalwrt.git /tmp/immortalwrt --depth 1 -b v24.10.4
         cp -r /tmp/immortalwrt/package/boot/uboot-rockchip package/boot/
         cp -r /tmp/immortalwrt/package/boot/arm-trusted-firmware-rockchip package/boot/
         cp -r /tmp/immortalwrt/target/linux/rockchip/image target/linux/rockchip/
- 
+
+         # 4. 生成适配 R4S 的 armv8.mk
+        cd target/linux/rockchip/image
+        rm -f *.mk
+        
+        cat <<EOF > armv8.mk
+        define Device/rk3399
+          SOC := rk3399
+          KERNEL_LOADADDR := 0x03200000
+          BOOT_FLOW := pine64-bin
+        endef
+        
+        define Device/friendlyarm_nanopi-r4s
+          \$(Device/rk3399)
+          DEVICE_VENDOR := FriendlyARM
+          DEVICE_MODEL := NanoPi R4S
+          DEVICE_PACKAGES := kmod-r8169
+        endef
+        
+        TARGET_DEVICES += friendlyarm_nanopi-r4s
+        EOF
+        
+        cd -
+        
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         # 4. 修复 Rust 编译报错 (必须加在 install 之后)
