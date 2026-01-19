@@ -1,3 +1,4 @@
+
 name: Build OpenWrt
 
 on:
@@ -222,13 +223,14 @@ jobs:
         rm -rf package/boot/rkbin
         rm -rf package/boot/uboot-rockchip
         rm -rf package/boot/arm-trusted-firmware-rockchip
+        # rockchip - target - r4s/r5s only
+        rm -rf target/linux/rockchip/image
         
         git clone https://github.com/immortalwrt/immortalwrt.git /tmp/immortalwrt --depth 1 -b openwrt-25.12
         cp -r /tmp/immortalwrt/package/boot/uboot-rockchip package/boot/
         cp -r /tmp/immortalwrt/package/boot/arm-trusted-firmware-rockchip package/boot/
-        #git clone https://github.com/sbwml/package_boot_uboot-rockchip package/boot/uboot-rockchip
-        #git clone https://github.com/sbwml/arm-trusted-firmware-rockchip package/boot/arm-trusted-firmware-rockchip
-
+        cp -r /tmp/immortalwrt/target/linux/rockchip/image target/linux/rockchip/
+ 
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         # 4. 修复 Rust 编译报错 (必须加在 install 之后)
@@ -473,46 +475,7 @@ jobs:
         echo "🔎 [Debug] 检查生成的文件..."
         IMG_DIR="staging_dir/target-aarch64_generic_musl/image"
         ls -lh $IMG_DIR/
-        
-        # 定义源文件变量
-        FILE_IDB="$IMG_DIR/rk3399-idbloader.bin"
-        FILE_UBOOT="$IMG_DIR/nanopi-r4s-rk3399-uboot.img"
-        FILE_TRUST="$IMG_DIR/rk3399-trust.bin"
-        
-        # 定义目标文件（OpenWrt 官方脚本要求的那个名字）
-        TARGET_FILE="$IMG_DIR/nanopi-r4s-rk3399-u-boot-rockchip.bin"
-        
-        echo "🔧 开始合成单个 u-boot-rockchip.bin 文件..."
-        
-        if [ -f "$FILE_IDB" ] && [ -f "$FILE_UBOOT" ]; then
-            # 1. 准备底包（以 idbloader 为基础，放在文件头部 0 偏移处）
-            cp -f "$FILE_IDB" "$TARGET_FILE"
-            
-            # 2. 写入 uboot.img 到 8MB 处
-            # OpenWrt 写入 SD 卡是从 Sector 64 开始的。
-            # ImmortalWrt 要求 uboot 在 Sector 16384 (8MB)。
-            # 相对偏移量 = 16384 - 64 = 16320
-            echo "   正在合入 uboot.img (Seek 16320)..."
-            dd if="$FILE_UBOOT" of="$TARGET_FILE" bs=512 seek=16320 conv=notrunc
-            
-            # 3. 写入 trust.bin 到 12MB 处
-            # ImmortalWrt 要求 trust 在 Sector 24576 (12MB)。
-            # 相对偏移量 = 24576 - 64 = 24512
-            if [ -f "$FILE_TRUST" ]; then
-                echo "   正在合入 trust.bin (Seek 24512)..."
-                dd if="$FILE_TRUST" of="$TARGET_FILE" bs=512 seek=24512 conv=notrunc
-            else
-                echo "⚠️ 未发现独立 trust.bin，可能已包含在 uboot.img 中"
-            fi
-            
-            echo "✅ 合成完成！"
-            ls -lh "$TARGET_FILE"
-            
-        else
-            echo "🔴 严重错误：缺关键文件 (idbloader 或 uboot.img)！"
-            exit 1
-        fi
-        
+                
     - name: Compile OpenWrt
       working-directory: ./openwrt
       id: compile
@@ -526,7 +489,7 @@ jobs:
         find build_dir/ -name *uboot-rockchip* || true
         
         echo "====== [Debug] 查找 staging_dir 里的 u-boot 文件 ======"
-        find staging_dir/ -name *uboot*
+        find staging_dir/ -name *uboot* || true
         find staging_dir/ -name *u-boot* || true
         find staging_dir/ -name *r4s* || true
         find staging_dir/ -name *rockchip* || true
