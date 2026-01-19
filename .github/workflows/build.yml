@@ -226,7 +226,7 @@ jobs:
         # rockchip - target - r4s/r5s only
         rm -rf target/linux/rockchip/image
         
-        git clone https://github.com/immortalwrt/immortalwrt.git /tmp/immortalwrt --depth 1 -b openwrt-25.12
+        git clone https://github.com/immortalwrt/immortalwrt.git /tmp/immortalwrt --depth 1 -b v24.10.4
         cp -r /tmp/immortalwrt/package/boot/uboot-rockchip package/boot/
         cp -r /tmp/immortalwrt/package/boot/arm-trusted-firmware-rockchip package/boot/
         cp -r /tmp/immortalwrt/target/linux/rockchip/image target/linux/rockchip/
