@@ -203,8 +203,8 @@ jobs:
         echo "Detected Architecture: $TARGET - $SUBTARGET"
         
         # 写入环境变量
-        echo "DEVICE_TARGET=$TARGET" >> $GITHUB_ENV
-        echo "DEVICE_SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+        echo "DEVICE_TARGET=Openwrt" >> $GITHUB_ENV
+        echo "DEVICE_SUBTARGET=${{ inputs.config_file }}" >> $GITHUB_ENV
 
     # 启用 Toolchain 缓存
     - name: Cache Toolchain
