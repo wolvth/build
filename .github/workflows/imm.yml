@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       repo_branch:
-        description: 'OpenWrt Source Branch'
+        description: 'ImmortalWrt Source Branch'
         required: true
-        default: 'v25.12.0-rc2'
+        default: '24.10.4'
       config_file:
         description: 'Config File Name (in config/)'
         required: true
@@ -113,7 +113,7 @@ jobs:
     - name: Clone Source Code
       run: |
         echo "Cloning branch: ${{ env.REPO_BRANCH }}"
-        git clone --depth 1 --branch v24.10.4 https://github.com/immortalwrt/immortalwrt.git openwrt        
+        git clone --depth 1 --branch $REPO_BRANCH https://github.com/immortalwrt/immortalwrt.git openwrt        
 
     # =======================================================
     #  私人 VPS 同步 (SSH Key 版)
@@ -219,14 +219,6 @@ jobs:
       run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        # 4. 修复 Rust 编译报错 (必须加在 install 之后)
-
-        # 如果你需要伪造内核指纹，请在这里插入
-        # Vermagic ------------------
-        #latest_version="$(curl -s https://github.com/openwrt/openwrt/tags | grep -Eo "v[0-9\.]+\-*r*c*[0-9]*.tar.gz" | sed -n '/[2-9][5-9]/p' | sed -n 1p | sed 's/v//g' | sed 's/.tar.gz//g')"
-        #wget https://downloads.openwrt.org/releases/${latest_version}/targets/rockchip/armv8/profiles.json
-        #jq -r '.linux_kernel.vermagic' profiles.json >.vermagic
-        #sed -i -e 's/^\(.\).*vermagic$/\1cp $(TOPDIR)\/.vermagic $(LINUX_DIR)\/.vermagic/' include/kernel-defaults.mk
     # ------------------------------------------------ 
     # 处理 Custom
     - name: Load Custom Configuration & Plugins
@@ -439,37 +431,6 @@ jobs:
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
-    # 步骤 1: 编译基础工具和交叉编译器
-    - name: Compile Tools & Toolchain
-      working-directory: ./openwrt
-      id: compile_tools
-      run: |
-        echo "⚙️ 正在编译 Host Tools..."
-        make tools/install -j$(nproc) || make tools/install -j1 V=s
-        
-        echo "🛠️ 正在编译 Cross Toolchain..."
-        make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
-
-    # 步骤 2: 单独编译 U-Boot 并处理文件名（针对 sbwml 源码的适配）
-    - name: Compile U-Boot & Fix Rename
-      working-directory: ./openwrt
-      id: compile_uboot
-      run: |
-        echo "🚀 基础环境就绪，开始编译 U-Boot..."
-        
-        # 此时 toolchain 已好，可以直接编译 uboot
-        make package/boot/uboot-rockchip/compile V=s -j1
-        
-        echo "🔎 [Debug] 查找生成的 U-Boot 文件..."
-        # 列出所有生成的文件，方便排查
-        find build_dir/ -name *r4s* || true
-        find build_dir/target-aarch64_generic_musl/ -name "*rockchip*"
-        echo "✅ 检测到通用名文件: $SRC_NAME"
-        find staging_dir/target-aarch64_generic_musl/image/ -name "*uboot*"
-        echo "🔴 警告：目标文件仍未找到，下一步可能会报错。"
-        ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
-        echo "⚠️ 未找到 $SRC_NAME，尝试查找 idbloader.img 组合..."
-        
     - name: Compile OpenWrt
       working-directory: ./openwrt
       id: compile
@@ -477,17 +438,12 @@ jobs:
         echo -e "$(nproc) thread compile"
         df -hT
         # 优先多线程，失败自动转单线程调试
-        make -j1 V=s || {
+        make -j$(nproc) || make -j1 V=s || {
         ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
         echo "====== [Debug] 查找 uboot-rockchip 产物 ======"
-        find build_dir/ -name *uboot-rockchip* || true
-        find build_dir/ -name *r4s* || true
+        #find build_dir/ -name *r4s* || true
         echo "====== [Debug] 查找 staging_dir 里的 u-boot 文件 ======"
-        find staging_dir/ -name *uboot*
-        find staging_dir/ -name *u-boot* || true
-        find staging_dir/ -name *r4s* || true
-        find staging_dir/ -name *rockchip* || true
-
+        #find staging_dir/ -name *r4s* || true
         # 必须报错退出，否则 Action 会显示成功
         exit 1
         }
@@ -508,7 +464,7 @@ jobs:
       if: steps.organize.outputs.status == 'success'
       run: |
         sudo apt-get install -y p7zip-full
-        ENCRYPT_NAME="OpenWrt_Secure_${{ inputs.version }}.7z"
+        ENCRYPT_NAME="OpenWrt_Secure_${{ inputs.repo_branch }}.7z"
 
         7z a -t7z -mhe=on -p"${{ secrets.FIRMWARE_PASSWORD }}" "$ENCRYPT_NAME" ${{ env.FIRMWARE }}/*
         mkdir -p upload_out
@@ -527,11 +483,10 @@ jobs:
       id: tag
       if: inputs.upload_release == true && steps.organize.outputs.status == 'success'
       run: |
-        echo "release_tag=${{ inputs.version }}-$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
-        echo "## OpenWrt Auto Build (Encrypted)" > release.txt
+        echo "release_tag=${{ inputs.repo_branch }}-$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
+        echo "## ImmortalWrt Auto Build (Encrypted)" > release.txt
         echo "⚠️ **此固件已加密 / Firmware is encrypted**" >> release.txt
         echo "* Platform: ${{ inputs.platform }}" >> release.txt
-        echo "* Version: ${{ inputs.version }}" >> release.txt
         echo "* Build Date: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
 
     - name: Upload to Release
