@@ -1,0 +1,532 @@
+name: Build op
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_branch:
+        description: 'OpenWrt Source Branch'
+        required: true
+        default: 'v25.12.0-rc2'
+      config_file:
+        description: 'Config File Name (in config/)'
+        required: true
+        default: 'r4s.config'
+      cache_toolchain:
+        description: 'Enable Toolchain Cache'
+        required: false
+        default: 'true'
+        type: boolean
+
+      upload_release:
+        description: '发布到 Release (Upload to Release)'
+        required: false
+        type: boolean
+        default: true
+        
+      ssh_sync:
+        description: '开启 VPS 私人同步'
+        type: boolean
+        required: false
+        default: false
+      vps_host:
+        description: 'VPS 地址 ( 必须IPv4地址/域名 )'
+        required: false
+        default: 'amd.899957.xyz'
+      vps_user:
+        description: 'VPS 用户名'
+        required: false
+        default: 'root'
+      remote_path:
+        description: 'VPS 远程目录'
+        required: false
+        default: '/root/openwrt'
+
+env:
+  REPO_URL: https://git.openwrt.org/openwrt/openwrt.git
+  # 从 input 读取，如果手动触发未指定则使用 default
+  REPO_BRANCH: ${{ inputs.repo_branch }}
+  CONFIG_FILE: config/${{ inputs.config_file }}
+  CUSTOM_PKG_DIR: new
+  CUSTOM_FILES_DIR: files
+  REPO_LIST_FILE: repos.list
+  TZ: Asia/Shanghai
+  
+permissions:
+  contents: write  
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      
+    - name: Print hardware info
+      run: |
+        echo "=== OS ==="
+        cat /etc/os-release || true
+        uname -a
+        echo "=== CPU ==="
+        lscpu
+        echo "=== Memory ==="
+        free -h
+        echo "=== CPU details (proc) ==="
+        head -n 20 /proc/cpuinfo          
+
+    - name: Optimize Disk Space
+      uses: hugoalh/disk-space-optimizer-ghaction@v0.8.1
+      with:
+        operate_sudo: "True"
+        general_include: ".+"
+        general_exclude: |-
+          ^GCC$
+          ^G\+\+$
+          Clang
+          LLVM
+        docker_prune: "True"
+        docker_clean: "True"
+        apt_prune: "True"
+        apt_clean: "True"
+        homebrew_prune: "True"
+        homebrew_clean: "True"
+        npm_prune: "True"
+        npm_clean: "True"
+        os_swap: "True"
+
+    - name: Setup Go Environment
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+        check-latest: true
+        cache: false 
+
+    - name: Initialization Environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo bash -c 'bash <(curl -s https://build-scripts.immortalwrt.org/init_build_environment.sh)'
+        sudo -E apt-get -qq install dwarves
+        sudo timedatectl set-timezone "$TZ"
+        sudo chown $USER:$GROUPS $GITHUB_WORKSPACE
+        
+    - name: Clone Source Code
+      run: |
+        echo "Cloning branch: ${{ env.REPO_BRANCH }}"
+        git clone --depth 1 --branch ${{ env.REPO_BRANCH }} $REPO_URL openwrt        
+
+    # =======================================================
+    #  私人 VPS 同步 (SSH Key 版)
+    # =======================================================
+    - name: Sync Private Config via SSH
+      if: inputs.ssh_sync == true
+      env:
+        SSH_KEY: ${{ secrets.VPS_PRIVATE_KEY }}  # 读取 Secret
+        VPS_HOST: ${{ inputs.vps_host }}
+        VPS_USER: ${{ inputs.vps_user }}
+        REMOTE_PATH: ${{ inputs.remote_path }}
+      run: |
+        echo "=== 开始私人定制同步 ==="
+        
+        # 1. 配置 SSH Key
+        mkdir -p ~/.ssh
+        echo "$SSH_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H $VPS_HOST >> ~/.ssh/known_hosts
+        SSH_OPTS="-i ~/.ssh/id_rsa -o BatchMode=yes -o ConnectTimeout=10"
+        
+        # 2. 同步 files 目录
+        # 将 VPS 上的 files 目录内容，合并到当前工作区的 files 目录
+        # 注意: 远程路径末尾加斜杠表示同步目录
+        echo "正在从 VPS 同步 files 目录..."
+        mkdir -p files/etc/uci-defaults/
+        ssh $SSH_OPTS $VPS_USER@$VPS_HOST "bash $REMOTE_PATH/rsync.sh > /dev/null"
+        echo "[OK] remote script done"
+        rsync -az --quiet -e "ssh $SSH_OPTS" \
+          $VPS_USER@$VPS_HOST:$REMOTE_PATH/files/ files/          
+        echo " 🛻 files 目录同步完成，当前 content:"
+        ls -F files/etc/
+        ls -laF files/root/
+        
+        echo " 🛻 同步uci-defaults"
+        rsync -avz -e "ssh $SSH_OPTS" \
+          $VPS_USER@$VPS_HOST:$REMOTE_PATH/uci-defaults/ files/etc/uci-defaults/
+        ls -F files/etc/uci-defaults/
+
+        # 3. 同步 new 源码目录 (覆盖/合并)
+        echo "正在从 VPS 同步 new 源码目录..."
+        mkdir -p new
+        # 将 VPS 上的 new 目录下的所有插件文件夹，同步到本地 new 目录
+        rsync -avz -e "ssh $SSH_OPTS" \
+          $VPS_USER@$VPS_HOST:$REMOTE_PATH/new/ new/         
+        echo " ✅ 同步完成，当前 new 目录："
+        ls -F new/        
+
+        # 4. 追加 custom.config repos.list
+        # 读取 VPS 上的 /new/diy.config，追加到本地 custom.config
+        echo "追加diy.config"        
+        # 确保本地文件存在
+        touch custom.config
+        echo "" >> custom.config # 确保换行
+        cat new/diy.config >> custom.config
+        echo "追加完成，最终custom.config"
+        echo "" >> custom.config
+        cat custom.config
+        
+        echo "追加diy.repos.list"
+        touch repos.list
+        echo "" >> repos.list # 确保换行
+        cat new/diy.repos.list >> repos.list
+        echo "配置追加完成，如下："
+        cat repos.list
+        # 清理 Key (虽然 Action 结束会销毁环境，但养成好习惯)
+        rm -f ~/.ssh/id_rsa
+    # =======================================================
+    # 智能计算缓存信息
+    # =======================================================
+    - name: Get Cache Infos
+      if: inputs.cache_toolchain == true
+      run: |
+        # 指定你的 config 文件路径
+        MY_CONFIG_PATH="$GITHUB_WORKSPACE/${{ env.CONFIG_FILE }}"
+        echo "Reading architecture info from $MY_CONFIG_PATH"
+        
+        # 提取 Target (如 rockchip)
+        # 逻辑：查找 CONFIG_TARGET_BOARD="xxx"，提取引号内的内容
+        TARGET=$(grep "^CONFIG_TARGET_BOARD" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}')
+        [ -z "$TARGET" ] && TARGET="unknown"
+        
+        # 提取 Subtarget (如 armv8)
+        SUBTARGET=$(grep "^CONFIG_TARGET_SUBTARGET" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}')
+        [ -z "$SUBTARGET" ] && SUBTARGET="unknown"
+        
+        echo "Detected Architecture: $TARGET - $SUBTARGET"
+        
+        # 写入环境变量
+        echo "DEVICE_TARGET=$TARGET" >> $GITHUB_ENV
+        echo "DEVICE_SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+
+    # 启用 Toolchain 缓存
+    - name: Cache Toolchain
+      if: inputs.cache_toolchain == true
+      uses: HiGarfield/cachewrtbuild@main
+      with:
+        ccache: false # 必须为 false，只缓存工具链以节省空间
+        # Key: 源码分支-架构-子架构 (不同配置只要架构相同就能共用缓存)
+        mixkey: ${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+        prefix: 'openwrt'
+
+    - name: Update & Install Feeds
+      working-directory: ./openwrt
+      run: |    
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+    # ------------------------------------------------ 
+    # 处理 Custom
+    - name: Load Custom Configuration & Plugins
+      run: |
+        mkdir -p openwrt/package/custom_repos
+        touch auto_packages.txt
+
+        # 🔴 定义抓取函数 (支持稀疏检出 + Makefile 修复 + 自动记录)
+        function git_sparse_clone() {
+          branch="$1" rurl="$2" localdir="$3" && shift 3
+          # 解析 URL
+          git_repo_url=$(echo $rurl | sed -E "s|/tree/.*||")
+          subdir=$(echo $rurl | sed -E "s|.*/tree/$branch/||")
+          pkg_name=$(basename $subdir)
+          
+          echo "Processing: $pkg_name from $subdir"
+          
+          # 临时目录处理
+          tmpdir="tmp_checkout_$(date +%s%N)"
+          git clone --depth 1 --filter=blob:none --sparse $git_repo_url $tmpdir
+          cd $tmpdir
+          git sparse-checkout set $subdir
+          git checkout $branch
+          
+          # 移动到 openwrt/package/custom_repos/
+          target_path="../openwrt/package/custom_repos/$pkg_name"
+          if [ -d "$target_path" ]; then rm -rf "$target_path"; fi
+          mv $subdir $target_path
+          cd ..
+          rm -rf $tmpdir
+        }
+          
+        # ⬇️📝 1. 处理 repos.list
+        echo "  ☁️ Git clone repos.lit..."
+        if [ -f "$GITHUB_WORKSPACE/$REPO_LIST_FILE" ]; then
+          echo "Reading $REPO_LIST_FILE..."
+          while IFS= read -r url || [ -n "$url" ]; do
+             [[ -z "$url" || "$url" =~ ^# ]] && continue
+             if [[ "$url" == *"tree/master"* || "$url" == *"tree/main"* ]]; then
+                 if [[ "$url" == *"tree/master"* ]]; then branch="master"; else branch="main"; fi
+                 git_sparse_clone $branch "$url" "openwrt/package/custom_repos"
+             else
+                 # 普通仓库 clone
+                 echo "Cloning standard repo: $url"
+                 cd openwrt/package/custom_repos
+                 git clone --depth 1 "$url"
+                 cd ../../../
+             fi
+          done < "$GITHUB_WORKSPACE/$REPO_LIST_FILE"
+        fi
+        
+        # 📂 2. 处理本地 new 目录 (手动维护的插件)
+        if [ -d "$GITHUB_WORKSPACE/$CUSTOM_PKG_DIR" ]; then
+          echo "  📂 Copying local custom packages...new"
+          cp -r $GITHUB_WORKSPACE/$CUSTOM_PKG_DIR/* openwrt/package/custom_repos/ || true
+        fi
+
+        echo "  😋 检查package目录下的自定义插件仓库" 
+        ls -lh openwrt/package/custom_repos
+        
+        # 🔴 3. Makefile 路径自动修复
+        echo "Applying global patches to custom packages..."
+        # 查找所有含 Makefile 的目录 (排除 src 目录)
+        find openwrt/package/custom_repos -name Makefile | while read makefile; do
+            # A. 修复 Go 路径 (../../lang/golang -> $(TOPDIR)/feeds/packages/lang/golang)
+            if grep -q "\.\./\.\./lang/golang/golang-package.mk" "$makefile"; then
+                echo "Fixing Go path in: $makefile"
+                sed -i 's|\.\./\.\./lang/golang/golang-package.mk|$(TOPDIR)/feeds/packages/lang/golang/golang-package.mk|g' "$makefile"
+            fi
+            
+            # B. 修复 Rust 路径 (../../lang/rust -> $(TOPDIR)/feeds/packages/lang/rust)
+            if grep -q "\.\./\.\./lang/rust/rust-package.mk" "$makefile"; then
+                echo "Fixing Rust path in: $makefile"
+                sed -i 's|\.\./\.\./lang/rust/rust-package.mk|$(TOPDIR)/feeds/packages/lang/rust/rust-package.mk|g' "$makefile"
+            fi            
+            
+            # C. 修复 LuCI 路径 (../../luci.mk -> $(TOPDIR)/feeds/luci/luci.mk)
+            if grep -q "\.\./\.\./luci.mk" "$makefile"; then
+                echo "Fixing LuCI path in: $makefile"
+                sed -i 's|\.\./\.\./luci.mk|$(TOPDIR)/feeds/luci/luci.mk|g' "$makefile"
+            fi
+        done
+
+        # ⬇️ 4. 选中下载的插件 auto_packages
+        echo "Scanning for packages to select...auto_packages"
+        find openwrt/package/custom_repos -name Makefile | while read makefile; do
+            # 提取目录名 (兜底策略)
+            pkg_dirname=$(basename "$(dirname "$makefile")")
+            # 标记打点
+            is_identified=false
+            # 预先提取 PKG_NAME (备用)
+            val_pkg_name=$(grep -E "^PKG_NAME:=" "$makefile" | awk -F':=' '{print $2}' | tr -d '[:space:]')
+          
+            # 🎯 优先处理 define Package/ (准确度最高，因为一源多包)
+            objs=$(grep -E "^define Package/[^/]+[[:space:]]*$" "$makefile" | sed -E 's/^define Package\///' | sed -E 's/[[:space:]]*$//')
+            
+            for pkg in $objs; do
+                # 情况 A: 定义使用了变量 $(PKG_NAME)，且我们提取到了变量值 -> 使用变量值
+                if [[ "$pkg" == *"\$(PKG_NAME)"* ]]; then
+                    if [ -n "$val_pkg_name" ]; then
+                        echo "CONFIG_PACKAGE_$val_pkg_name=y" >> auto_packages.txt
+                        echo "  🔹 [Define+Var] $val_pkg_name"
+                        is_identified=true
+                    fi
+                # 情况 B: 普通定义，排除其他变量写法 $(...) -> 直接使用
+                elif [[ "$pkg" != *"\$("* ]]; then
+                    echo "CONFIG_PACKAGE_$pkg=y" >> auto_packages.txt
+                    echo "  ✅ [Define Match] $pkg"
+                    is_identified=true
+                fi
+            done
+
+            # 📘 如果没找到 define，尝试使用 PKG_NAME
+            if [ "$is_identified" == "false" ] && [ -n "$val_pkg_name" ]; then
+                # 排除嵌套变量的情况
+                if [[ "$val_pkg_name" != *"\$("* ]]; then
+                    echo "CONFIG_PACKAGE_$val_pkg_name=y" >> auto_packages.txt
+                    echo "  💡 [LuCI/Simple] $val_pkg_name (from PKG_NAME)"
+                    is_identified=true
+                fi
+            fi
+
+            # ⚠️ 实在找不到，使用目录名兜底 (luci常见)
+            if [ "$is_identified" == "false" ]; then
+                if [ "$pkg_dirname" != "src" ] && [ "$pkg_dirname" != "files" ]; then
+                    echo "CONFIG_PACKAGE_$pkg_dirname=y" >> auto_packages.txt
+                    echo "  📂 [Fallback] Directory: $pkg_dirname"
+                fi
+            fi
+        done
+        
+        # 🧹 最终去重
+        sort -u auto_packages.txt -o auto_packages.txt
+        
+        # 🔴 5. 处理 custom.config (支持 # CONFIG... is not set)
+        CUSTOM_CONFIG_PATH="$GITHUB_WORKSPACE/custom.config"
+
+        if [ -f "$CUSTOM_CONFIG_PATH" ]; then
+          echo "Processing custom.config..."
+          while IFS= read -r line || [ -n "$line" ]; do
+            # 去除首尾空格
+            line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            
+            # 跳过空行
+            if [[ -z "$line" ]]; then continue; fi
+            
+            # !!!优先处理 "is not set" 的标准禁用格式
+            # 使用正则匹配：以 "# CONFIG_" 开头，以 "is not set" 结尾
+            if [[ "$line" =~ ^#\ CONFIG_.*\ is\ not\ set$ ]]; then
+                echo "$line" >> auto_packages.txt
+                echo "  [Explicit Disable]: $line"
+                continue
+            fi
+            
+            # 跳过普通注释 (以 # 开头的其他内容)
+            if [[ "$line" == \#* ]]; then continue; fi
+            
+            # 处理其他情况
+            if [[ "$line" == CONFIG_* ]]; then
+                # a. 标准开启 (CONFIG_xxx=y)
+                echo "$line" >> auto_packages.txt
+                echo "  [Config Enable]: $line"
+                # b. 简写禁用 (-包名) -> 自动转为 is not set
+            elif [[ "$line" == -* ]]; then
+                pkg_name=${line:1}
+                echo "# CONFIG_PACKAGE_$pkg_name is not set" >> auto_packages.txt
+                echo "  [Package Disable]: $pkg_name"
+                # c. 简写开启 (包名) -> 自动转为 =y
+            else
+                echo "CONFIG_PACKAGE_$line=y" >> auto_packages.txt
+                echo "  [Package Enable]: $line"
+            fi
+          done < "$CUSTOM_CONFIG_PATH"
+        else
+          echo "custom.config not found, skipping."
+        fi
+        
+        # 📂 6. 处理 files 目录 (目录下内容集成进固件1比1覆盖，同imagebuilder用法)
+        if [ -d "$GITHUB_WORKSPACE/$CUSTOM_FILES_DIR" ]; then
+          echo "Copying custom files..."
+          cp -r $GITHUB_WORKSPACE/$CUSTOM_FILES_DIR openwrt/files
+          chmod -R +x openwrt/files/* || true
+        fi
+        
+        # 🧩 7. 加载配置文件 (从仓库config/ 目录)
+        if [ -e "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
+            echo "Using config file: $CONFIG_FILE"
+            cp "$GITHUB_WORKSPACE/$CONFIG_FILE" openwrt/.config
+        else
+            echo "::error::Config file $CONFIG_FILE not found!"
+            exit 1
+        fi
+        
+        cd openwrt
+        # ✅ 修复 Go 路径
+        sed -i '/CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT/d' .config    
+        # ✅ 选中插件，前面处理custom.config得到auto_packages，先去重再追加
+        sort -u ../auto_packages.txt -o ../auto_packages.txt || true 
+        echo "  ⚙️ Auto-selecting custom in .config..."
+        cat ../auto_packages.txt >> .config
+        #  打印出来看看选中了啥
+        cat ../auto_packages.txt
+        
+        # 🔴 生成最终配置
+        make defconfig
+
+    - name: Download Libraries
+      working-directory: ./openwrt
+      run: |
+        make download -j8
+        find dl -size -1024c -exec rm -f {} \;
+
+    # 步骤 1: 编译基础工具和交叉编译器
+    - name: Compile Tools & Toolchain
+      working-directory: ./openwrt
+      id: compile_tools
+      run: |
+        echo "⚙️ 正在编译 Host Tools..."
+        make tools/install -j$(nproc) || make tools/install -j1 V=s
+        
+        echo "🛠️ 正在编译 Cross Toolchain..."
+        make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
+
+    # 步骤 2: 单独编译 U-Boot 并处理文件名（针对 sbwml 源码的适配）
+    - name: Compile U-Boot & Fix Rename
+      working-directory: ./openwrt
+      id: compile_uboot
+      run: |
+        echo "🚀 开始编译 U-Boot..."
+        make package/boot/uboot-rockchip/compile -j$(nproc) || make package/boot/uboot-rockchip/compile -j1 V=s
+        
+        echo "🔎 [Debug] 检查生成的文件..."
+        ls -lh staging_dir/target-aarch64_generic_musl/image/
+    
+    - name: Compile OpenWrt
+      working-directory: ./openwrt
+      id: compile
+      run: |
+        echo -e "$(nproc) thread compile"
+        df -hT
+        # 优先多线程，失败自动转单线程调试
+        make -j$(nproc) || make -j1 V=s || {
+        ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
+        echo "====== [Debug] 查找 uboot-rockchip 产物 ======"
+        find build_dir/ -name *uboot-rockchip* || true
+        
+        echo "====== [Debug] 查找 staging_dir 里的 u-boot 文件 ======"
+        find staging_dir/ -name *uboot* || true
+        find staging_dir/ -name *u-boot* || true
+        find staging_dir/ -name *r4s* || true
+        find staging_dir/ -name *rockchip* || true
+
+        # 必须报错退出，否则 Action 会显示成功
+        exit 1
+        }
+        echo "status=success" >> $GITHUB_OUTPUT
+        ls -lh staging_dir/target-aarch64_generic_musl/image/
+        df -hT        
+
+    - name: Organize Files
+      id: organize
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        cd openwrt/bin
+        ls -lhR
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Encrypt Firmware
+      id: encrypt
+      if: steps.organize.outputs.status == 'success'
+      run: |
+        sudo apt-get install -y p7zip-full
+        ENCRYPT_NAME="OpenWrt_Secure_${{ inputs.repo_branch }}.7z"
+
+        7z a -t7z -mhe=on -p"${{ secrets.FIRMWARE_PASSWORD }}" "$ENCRYPT_NAME" ${{ env.FIRMWARE }}/*
+        mkdir -p upload_out
+        mv "$ENCRYPT_NAME" upload_out/
+        ls -lh upload_out/
+        echo "SECURE_DIR=$PWD/upload_out" >> $GITHUB_ENV
+
+    - name: Upload Firmware Artifact
+      uses: actions/upload-artifact@v4
+      if: steps.organize.outputs.status == 'success' && inputs.upload_release != true
+      with:
+        name: OpenWrt_Encrypted_Artifact
+        path: ${{ env.SECURE_DIR }}/*
+        retention-days: 3
+
+    - name: Generate Release Tag
+      id: tag
+      if: inputs.upload_release == true && steps.organize.outputs.status == 'success'
+      run: |
+        echo "release_tag=${{ inputs.repo_branch }}-$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
+        echo "## OpenWrt Auto Build (Encrypted)" > release.txt
+        echo "⚠️ **此固件已加密 / Firmware is encrypted**" >> release.txt
+        echo "* Version: ${{ inputs.repo_branch }}" >> release.txt
+        echo "* Build Date: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
+
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v2
+      if: inputs.upload_release == true && steps.organize.outputs.status == 'success'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        body_path: release.txt
+        # 关键修改：指向加密后的目录
+        files: ${{ env.SECURE_DIR }}/*
