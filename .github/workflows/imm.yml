@@ -6,7 +6,7 @@ on:
       repo_branch:
         description: 'ImmortalWrt Source Branch'
         required: true
-        default: '24.10.4'
+        default: 'v24.10.4'
       config_file:
         description: 'Config File Name (in config/)'
         required: true
