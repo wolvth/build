@@ -436,6 +436,7 @@ jobs:
       run: |
         echo -e "$(nproc) thread compile"
         df -hT
+        ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
         # 优先多线程，失败自动转单线程调试
         make -j$(nproc) || make -j1 V=s || {
         ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
@@ -447,6 +448,7 @@ jobs:
         exit 1
         }
         echo "status=success" >> $GITHUB_OUTPUT
+        ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
         df -hT        
 
     - name: Organize Files
