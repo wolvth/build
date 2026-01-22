@@ -474,28 +474,6 @@ jobs:
       run: |
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
-
-    # 步骤 1: 编译基础工具和交叉编译器
-    - name: Compile Tools & Toolchain
-      working-directory: ./openwrt
-      id: compile_tools
-      run: |
-        echo "⚙️ 正在编译 Host Tools..."
-        make tools/install -j$(nproc) || make tools/install -j1 V=s
-        
-        echo "🛠️ 正在编译 Cross Toolchain..."
-        make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
-
-    # 步骤 2: 单独编译 U-Boot 并处理文件名（针对 sbwml 源码的适配）
-    - name: Compile U-Boot & Fix Rename
-      working-directory: ./openwrt
-      id: compile_uboot
-      run: |
-        echo "🚀 开始编译 U-Boot..."
-        make package/boot/uboot-rockchip/compile -j$(nproc) || make package/boot/uboot-rockchip/compile -j1 V=s
-        
-        echo "🔎 [Debug] 检查生成的文件..."
-        ls -lh staging_dir/target-aarch64_generic_musl/image/
     
     - name: Compile OpenWrt
       working-directory: ./openwrt
