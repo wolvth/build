@@ -255,14 +255,13 @@ jobs:
         
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        # 4. 修复 Rust 编译报错 (必须加在 install 之后)
 
         # 如果你需要伪造内核指纹，请在这里插入
         # Vermagic ------------------
-        #latest_version="$(curl -s https://github.com/openwrt/openwrt/tags | grep -Eo "v[0-9\.]+\-*r*c*[0-9]*.tar.gz" | sed -n '/[2-9][5-9]/p' | sed -n 1p | sed 's/v//g' | sed 's/.tar.gz//g')"
-        #wget https://downloads.openwrt.org/releases/${latest_version}/targets/rockchip/armv8/profiles.json
-        #jq -r '.linux_kernel.vermagic' profiles.json >.vermagic
-        #sed -i -e 's/^\(.\).*vermagic$/\1cp $(TOPDIR)\/.vermagic $(LINUX_DIR)\/.vermagic/' include/kernel-defaults.mk
+        latest_version="$(curl -s https://github.com/openwrt/openwrt/tags | grep -Eo "v[0-9\.]+\-*r*c*[0-9]*.tar.gz" | sed -n '/[2-9][5-9]/p' | sed -n 1p | sed 's/v//g' | sed 's/.tar.gz//g')"
+        wget https://downloads.openwrt.org/releases/${latest_version}/targets/rockchip/armv8/profiles.json
+        jq -r '.linux_kernel.vermagic' profiles.json >.vermagic
+        sed -i -e 's/^\(.\).*vermagic$/\1cp $(TOPDIR)\/.vermagic $(LINUX_DIR)\/.vermagic/' include/kernel-defaults.mk
     # ------------------------------------------------ 
     # 处理 Custom
     - name: Load Custom Configuration & Plugins
