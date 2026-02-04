@@ -467,7 +467,9 @@ jobs:
         
         # 🔴 生成最终配置
         make defconfig
-
+        grep "OPTIMIZATION" .config
+        grep "KERNEL_CFLAGS" .config
+        
     - name: Download Libraries
       working-directory: ./openwrt
       run: |
