@@ -318,7 +318,11 @@ jobs:
           echo "  📂 Copying local custom packages...new"
           cp -r $GITHUB_WORKSPACE/$CUSTOM_PKG_DIR/* openwrt/package/custom_repos/ || true
         fi
-
+        
+        echo "  😋 修改10_system.js的patch"
+        cp -r openwrt/feeds/luci/modules/luci-mod-status openwrt/package/custom_repos/
+        ls openwrt/package/custom_repos/luci-mod-status/
+        ls openwrt/package/custom_repos/luci-mod-status/patches
         echo "  😋 检查package目录下的自定义插件仓库" 
         ls -lh openwrt/package/custom_repos
         
