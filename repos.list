@@ -1,8 +1,9 @@
-https://github.com/immortalwrt/luci/tree/master/applications/luci-app-arpbind
 https://github.com/immortalwrt/luci/tree/master/applications/luci-app-cpufreq
+https://github.com/immortalwrt/immortalwrt/tree/master/package/emortal/cpufreq
+
 https://github.com/immortalwrt/luci/tree/master/applications/luci-app-ddns-go
 https://github.com/immortalwrt/packages/tree/master/net/ddns-go
-https://github.com/immortalwrt/immortalwrt/tree/master/package/emortal/cpufreq
+
 https://github.com/immortalwrt/luci/tree/master/applications/luci-app-diskman
 
 https://github.com/blueberry-pie-11/openwrt-fakesip
