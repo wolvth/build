@@ -264,7 +264,6 @@ jobs:
     - name: Load Custom Configuration & Plugins
       run: |
         mkdir -p openwrt/package/custom_repos
-        touch auto_packages.txt
 
         # 🔴 定义抓取函数 (支持稀疏检出 + Makefile 修复 + 自动记录)
         function git_sparse_clone() {
@@ -346,6 +345,7 @@ jobs:
         done
 
         # ⬇️ 4. 选中下载的插件 auto_packages
+        touch auto_packages.txt
         echo "Scanning for packages to select...auto_packages"
         find openwrt/package/custom_repos -name Makefile | while read makefile; do
             # 提取目录名 (兜底策略)
