@@ -179,40 +179,6 @@ jobs:
         cat repos.list
         # 清理 Key (虽然 Action 结束会销毁环境，但养成好习惯)
         rm -f ~/.ssh/id_rsa
-    # =======================================================
-    # 智能计算缓存信息
-    # =======================================================
-    - name: Get Cache Infos
-      if: inputs.cache_toolchain == true
-      run: |
-        # 指定你的 config 文件路径
-        MY_CONFIG_PATH="$GITHUB_WORKSPACE/${{ env.CONFIG_FILE }}"
-        echo "Reading architecture info from $MY_CONFIG_PATH"
-        
-        # 提取 Target (如 rockchip)
-        # 逻辑：查找 CONFIG_TARGET_BOARD="xxx"，提取引号内的内容
-        TARGET=$(grep "^CONFIG_TARGET_BOARD" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}')
-        [ -z "$TARGET" ] && TARGET="unknown"
-        
-        # 提取 Subtarget (如 armv8)
-        SUBTARGET=$(grep "^CONFIG_TARGET_SUBTARGET" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}')
-        [ -z "$SUBTARGET" ] && SUBTARGET="unknown"
-        
-        echo "Detected Architecture: $TARGET - $SUBTARGET"
-        
-        # 写入环境变量
-        echo "DEVICE_TARGET=$TARGET" >> $GITHUB_ENV
-        echo "DEVICE_SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-
-    # 启用 Toolchain 缓存
-    - name: Cache Toolchain
-      if: inputs.cache_toolchain == true
-      uses: HiGarfield/cachewrtbuild@main
-      with:
-        ccache: false # 必须为 false，只缓存工具链以节省空间
-        # Key: 源码分支-架构-子架构 (不同配置只要架构相同就能共用缓存)
-        mixkey: ${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
-        prefix: 'openwrt'
 
     - name: Update & Install Feeds
       working-directory: ./openwrt
@@ -464,12 +430,54 @@ jobs:
         cat ../auto_packages.txt >> .config
         #  打印出来看看选中了啥
         cat ../auto_packages.txt
+
+        # =========== 新增这两行 ===========
+        echo "  🚀 Enabling CCACHE..."
+        echo "CONFIG_CCACHE=y" >> .config
+        # ================================
         
         # 🔴 生成最终配置
         make defconfig
         grep "OPTIMIZATION" .config
         grep "KERNEL_CFLAGS" .config
         
+    # 1️⃣ 获取设备架构信息 (为 Toolchain 缓存做准备)
+    - name: Get Cache Infos
+      id: get_info
+      run: |
+        # 指向你的 .config 路径
+        MY_CONFIG_PATH="openwrt/.config" 
+        
+        # 提取 Target 和 Subtarget
+        TARGET=$(grep "^CONFIG_TARGET_BOARD" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}')
+        SUBTARGET=$(grep "^CONFIG_TARGET_SUBTARGET" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}')
+        
+        echo "Detected Architecture: $TARGET - $SUBTARGET"
+        
+        echo "DEVICE_TARGET=$TARGET" >> $GITHUB_ENV
+        echo "DEVICE_SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+
+    # 2️⃣ 缓存工具链 (跳过编译 GCC 的漫长过程)
+    - name: Cache Toolchain
+      if: inputs.cache_toolchain == true  
+      uses: HiGarfield/cachewrtbuild@main
+      with:
+        ccache: false   # 这里关掉，因为下面会用官方 cache 处理 ccache
+        prefix: 'openwrt' # 你的源码目录名
+        # Key 逻辑：架构没变就复用工具链
+        mixkey: ${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+        
+    - name: Cache OpenWrt
+      uses: actions/cache@v4
+      with:
+        path: |
+          openwrt/dl
+          openwrt/.ccache
+        # key 包含 .config 的 hash，一旦你修改了插件配置，缓存会自动更新
+        key: ${{ runner.os }}-openwrt-${{ hashFiles('openwrt/.config') }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-
+          
     - name: Download Libraries
       working-directory: ./openwrt
       run: |
@@ -480,6 +488,9 @@ jobs:
       working-directory: ./openwrt
       id: compile
       run: |
+        export CCACHE_DIR=$(pwd)/.ccache
+        mkdir -p $CCACHE_DIR
+
         echo -e "$(nproc) thread compile"
         df -hT
         # 优先多线程，失败自动转单线程调试
