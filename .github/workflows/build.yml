@@ -472,9 +472,9 @@ jobs:
           openwrt/dl
           openwrt/.ccache
         # key 包含 .config 的 hash，一旦你修改了插件配置，缓存会自动更新
-        key: ${{ runner.os }}-openwrt-${{ hashFiles('openwrt/.config') }}
+        key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ hashFiles('openwrt/.config') }}
         restore-keys: |
-          ${{ runner.os }}-openwrt-
+          ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-
           
     - name: Download Libraries
       working-directory: ./openwrt
