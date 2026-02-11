@@ -488,7 +488,7 @@ jobs:
       run: |
         export CCACHE_DIR=$(pwd)/.ccache
         mkdir -p $CCACHE_DIR
-
+        ccache -M 2G
         echo -e "$(nproc) thread compile"
         df -hT
         # 优先多线程，失败自动转单线程调试
@@ -508,6 +508,9 @@ jobs:
         }
         echo "status=success" >> $GITHUB_OUTPUT
         ls -lh staging_dir/target-aarch64_generic_musl/image/
+        echo "✅ Compilation finished. Cleaning up..."
+        # 关键操作：删除构建目录，为最后上传缓存腾出空间
+        rm -rf build_dir
         df -hT        
 
     - name: Organize Files
