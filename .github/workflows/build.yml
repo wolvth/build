@@ -152,7 +152,6 @@ jobs:
         echo " 🛻 同步uci-defaults"
         rsync -avz -e "ssh $SSH_OPTS" \
           $VPS_USER@$VPS_HOST:$REMOTE_PATH/uci-defaults/ files/etc/uci-defaults/
-        ls -F files/etc/uci-defaults/
 
         # 3. 同步 new 源码目录 (覆盖/合并)
         echo "正在从 VPS 同步 new 源码目录..."
@@ -164,21 +163,19 @@ jobs:
         ls -F new/        
 
         # 4. 追加 custom.config repos.list
-        # 读取 VPS 上的 /new/diy.config，追加到本地 custom.config
-        echo "追加diy.config"        
+        # 读取 VPS 上的 /new/diy.config，追加到本地 custom.config     
         # 确保本地文件存在
         touch custom.config
         echo "" >> custom.config # 确保换行
         cat new/diy.config >> custom.config
-        echo "追加完成，最终custom.config"
-        echo "" >> custom.config
+        echo "追加diy.config，最终custom.config"
         cat custom.config
-        
-        echo "追加diy.repos.list"
+
+        # 读取 VPS 上的 /new/diy.repos.list，追加到本地 repos.list 
         touch repos.list
         echo "" >> repos.list # 确保换行
         cat new/diy.repos.list >> repos.list
-        echo "配置追加完成，如下："
+        echo "追加diy.repos.list, 最终repos.list"
         cat repos.list
         # 清理 Key (虽然 Action 结束会销毁环境，但养成好习惯)
         rm -f ~/.ssh/id_rsa
@@ -322,8 +319,7 @@ jobs:
         echo "  😋 修改10_system.js的patch"
         cp -r openwrt/feeds/luci/modules/luci-mod-status openwrt/package/custom_repos/
         ls openwrt/package/custom_repos/luci-mod-status/
-        ls openwrt/package/custom_repos/luci-mod-status/patches
-        echo "  😋 检查package目录下的自定义插件仓库" 
+        echo "  😋 检查package目录下的自定义插件仓库"
         ls -lh openwrt/package/custom_repos
         
         # 🔴 3. Makefile 路径自动修复
