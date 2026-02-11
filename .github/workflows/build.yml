@@ -431,10 +431,8 @@ jobs:
         #  打印出来看看选中了啥
         cat ../auto_packages.txt
 
-        # =========== 新增这两行 ===========
         echo "  🚀 Enabling CCACHE..."
         echo "CONFIG_CCACHE=y" >> .config
-        # ================================
         
         # 🔴 生成最终配置
         make defconfig
@@ -465,7 +463,7 @@ jobs:
         ccache: false   # 这里关掉，因为下面会用官方 cache 处理 ccache
         prefix: 'openwrt' # 你的源码目录名
         # Key 逻辑：架构没变就复用工具链
-        mixkey: ${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+        mixkey: ${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
         
     - name: Cache OpenWrt
       uses: actions/cache@v4
