@@ -286,6 +286,11 @@ jobs:
         ls openwrt/package/custom_repos/luci-mod-status/
         echo "  😋 检查package目录下的自定义插件仓库"
         ls -lh openwrt/package/custom_repos
+
+        echo "  🔧 Fixing Go compilation with Ccache..."
+        # 强制 Go 语言包使用“无缓存”的编译器 (TARGET_CC_NOCACHE)
+        # 这会修改 feeds 里的 golang 定义，让它绕过 ccache
+        sed -i 's/$(TARGET_CC)/$(TARGET_CC_NOCACHE)/g' feeds/packages/lang/golang/golang-package.mk || true
         
         # 🔴 3. Makefile 路径自动修复
         echo "Applying global patches to custom packages..."
