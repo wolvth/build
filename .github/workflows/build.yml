@@ -287,11 +287,6 @@ jobs:
         echo "  😋 检查package目录下的自定义插件仓库"
         ls -lh openwrt/package/custom_repos
 
-        echo "  🔧 Fixing Go compilation with Ccache..."
-        # 强制 Go 语言包使用“无缓存”的编译器 (TARGET_CC_NOCACHE)
-        # 这会修改 feeds 里的 golang 定义，让它绕过 ccache
-        sed -i 's/$(TARGET_CC)/$(TARGET_CC_NOCACHE)/g' feeds/packages/lang/golang/golang-package.mk || true
-        
         # 🔴 3. Makefile 路径自动修复
         echo "Applying global patches to custom packages..."
         # 查找所有含 Makefile 的目录 (排除 src 目录)
@@ -435,10 +430,7 @@ jobs:
         cat ../auto_packages.txt >> .config
         #  打印出来看看选中了啥
         cat ../auto_packages.txt
-
-        echo "  🚀 Enabling CCACHE..."
-        echo "CONFIG_CCACHE=y" >> .config
-        
+       
         # 🔴 生成最终配置
         make defconfig
         grep "OPTIMIZATION" .config
@@ -469,18 +461,7 @@ jobs:
         prefix: 'openwrt' # 你的源码目录名
         # Key 逻辑：架构没变就复用工具链
         mixkey: ${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
-        
-    - name: Cache OpenWrt
-      uses: actions/cache@v4
-      with:
-        path: |
-          openwrt/dl
-          openwrt/.ccache
-        # key 包含 .config 的 hash，一旦你修改了插件配置，缓存会自动更新
-        key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ hashFiles('openwrt/.config') }}
-        restore-keys: |
-          ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-
-          
+
     - name: Download Libraries
       working-directory: ./openwrt
       run: |
@@ -491,9 +472,6 @@ jobs:
       working-directory: ./openwrt
       id: compile
       run: |
-        export CCACHE_DIR=$(pwd)/.ccache
-        mkdir -p $CCACHE_DIR
-        ccache -M 2G
         echo -e "$(nproc) thread compile"
         df -hT
         # 优先多线程，失败自动转单线程调试
