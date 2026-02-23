@@ -96,7 +96,7 @@ jobs:
         os_swap: "True"
 
     - name: Setup Go Environment
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       with:
         go-version: '1.26'
         check-latest: true
