@@ -440,7 +440,7 @@ jobs:
       if: steps.organize.outputs.status == 'success'
       run: |
         sudo apt-get install -y p7zip-full
-        ENCRYPT_NAME="OpenWrt_Secure_${{ inputs.repo_branch }}.7z"
+        ENCRYPT_NAME="OpenWrt_${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}_${{ inputs.repo_branch }}.7z"
 
         7z a -t7z -mhe=on -p"${{ secrets.FIRMWARE_PASSWORD }}" "$ENCRYPT_NAME" ${{ env.FIRMWARE }}/*
         mkdir -p upload_out
@@ -460,8 +460,7 @@ jobs:
       id: tag
       if: inputs.upload_release == true && steps.organize.outputs.status == 'success'
       run: |
-        echo "release_tag=${{ inputs.repo_branch }}-$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
-        echo "## OpenWrt Auto Build (Encrypted)" > release.txt
+        echo "release_tag=${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}" >> $GITHUB_OUTPUT
         echo "⚠️ **此固件已加密 / Firmware is encrypted**" >> release.txt
         echo "* Version: ${{ inputs.repo_branch }}" >> release.txt
         echo "* Build Date: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
