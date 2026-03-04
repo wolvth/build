@@ -446,11 +446,13 @@ jobs:
         # 提取 Target 和 Subtarget
         TARGET=$(grep "^CONFIG_TARGET_BOARD" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}')
         SUBTARGET=$(grep "^CONFIG_TARGET_SUBTARGET" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}')
+        PROFILE=$(grep "^CONFIG_TARGET_PROFILE" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}' | sed 's/^DEVICE_//')
         
         echo "Detected Architecture: $TARGET - $SUBTARGET"
         
         echo "DEVICE_TARGET=$TARGET" >> $GITHUB_ENV
         echo "DEVICE_SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+        echo "DEVICE_PROFILE=$PROFILE" >> $GITHUB_ENV
 
     # 2️⃣ 缓存工具链 (跳过编译 GCC 的漫长过程)
     - name: Cache Toolchain
@@ -510,7 +512,7 @@ jobs:
       if: steps.organize.outputs.status == 'success'
       run: |
         sudo apt-get install -y p7zip-full
-        ENCRYPT_NAME="OpenWrt_Secure_${{ inputs.repo_branch }}.7z"
+        ENCRYPT_NAME="OpenWrt_${{ env.DEVICE_PROFILE }}-$(date +'%Y.%m.%d-%H%M%S').7z"
 
         7z a -t7z -mhe=on -p"${{ secrets.FIRMWARE_PASSWORD }}" "$ENCRYPT_NAME" ${{ env.FIRMWARE }}/*
         mkdir -p upload_out
@@ -530,8 +532,7 @@ jobs:
       id: tag
       if: inputs.upload_release == true && steps.organize.outputs.status == 'success'
       run: |
-        echo "release_tag=${{ inputs.repo_branch }}-$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
-        echo "## OpenWrt Auto Build (Encrypted)" > release.txt
+        echo "release_tag=${{ env.DEVICE_PROFILE }}-${{ inputs.repo_branch }}" >> $GITHUB_OUTPUT
         echo "⚠️ **此固件已加密 / Firmware is encrypted**" >> release.txt
         echo "* Version: ${{ inputs.repo_branch }}" >> release.txt
         echo "* Build Date: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
