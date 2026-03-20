@@ -430,10 +430,15 @@ jobs:
         cat ../auto_packages.txt >> .config
         #  打印出来看看选中了啥
         cat ../auto_packages.txt
-        echo CONFIG_NETKIT=y >> target/linux/generic/config-6.12
+        
+        KERNEL_CONFIG=$(ls target/linux/generic/config-[0-9]*.[0-9]*)
+        echo "Target kernel config is: $KERNEL_CONFIG"
+        echo CONFIG_NETKIT=y >> "$KERNEL_CONFIG"
+
         # 🔴 生成最终配置
         make defconfig
-        grep "NETKIT" target/linux/generic/config-6.12
+        
+        grep "NETKIT" "$KERNEL_CONFIG"
         grep "OPTIMIZATION" .config
         grep "KERNEL_CFLAGS" .config
         
