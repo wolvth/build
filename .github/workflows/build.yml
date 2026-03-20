@@ -430,9 +430,10 @@ jobs:
         cat ../auto_packages.txt >> .config
         #  打印出来看看选中了啥
         cat ../auto_packages.txt
-       
+        echo CONFIG_NETKIT=y >> target/linux/generic/config-6.12
         # 🔴 生成最终配置
         make defconfig
+        grep "NETKIT" target/linux/generic/config-6.12
         grep "OPTIMIZATION" .config
         grep "KERNEL_CFLAGS" .config
         
