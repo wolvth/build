@@ -7,7 +7,7 @@ on:
       repo_branch:
         description: 'OpenWrt Source Branch'
         required: true
-        default: 'v25.12.1'
+        default: 'v25.12.2'
       config_file:
         description: 'Config File Name (in config/)'
         required: true
