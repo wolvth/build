@@ -6,7 +6,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=duck
 # 【修复1】APK 版本号必须用下划线分隔 rc，例如 1.1.0_rc1
-PKG_VERSION:=2.0.0
+PKG_VERSION:=2.0.0_rc1
 PKG_RELEASE:=1
 
 # 【修复1】定义上游真实版本号（用于下载和内部版本显示）
