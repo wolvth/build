@@ -1,7 +1,7 @@
 # 文件路径: .github/workflows/build-openwrt-plugin.yml
-# 编译 luci-app-dae 的 APK 包（OpenWrt 25.12.4 已切换到 APK 包管理器）
+# 编译 luci-app-dae 的 APK 包（OpenWrt 25.12.4 rockchip/armv8）
 
-name: Build luci-app-dae .apk (rockchip/armv8)
+name: Build luci-app-dae .apk
 
 on:
   push:
@@ -15,15 +15,17 @@ jobs:
 
     steps:
     # ============================================
-    # 第1步：检出本仓库代码
+    # 第1步：检出仓库代码
     # ============================================
     - name: 检出仓库代码
       uses: actions/checkout@v4
 
     # ============================================
     # 第2步：安装编译依赖
-    #   关键修复：python3-elftools 解决 u-boot 前置检查报错
-    #   关键修复：zstd 解决 .tar.zst 解压
+    #   关键修复：
+    #     - python3-pyelftools（不是 python3-elftools！）
+    #       解决 "Please install the Python3 elftools module"
+    #     - zstd 解决 .tar.zst 解压
     # ============================================
     - name: 安装系统依赖
       run: |
@@ -41,22 +43,33 @@ jobs:
           wget \
           unzip \
           python3 \
+          python3-pyelftools \
+          python3-dev \
+          python3-setuptools \
           zstd
 
+        # ---- 验证关键依赖 ----
+        echo "=== 验证 python3-pyelftools ==="
+        python3 -c "from elftools.elf.elffile import ELFFile; print('✅ pyelftools OK')" || {
+          echo "❌ pyelftools 导入失败，尝试 pip 安装..."
+          pip3 install pyelftools
+        }
+
+        echo "=== 验证 zstd ==="
+        zstd --version
+
     # ============================================
-    # 第3步：缓存 SDK 压缩包
-    #   只缓存压缩包本身，每次全新解压，避免 build state 残留
+    # 第3步：缓存 SDK 压缩包（只缓存压缩包，避免 build state 残留）
     # ============================================
     - name: 缓存 SDK 压缩包
       id: cache-sdk
       uses: actions/cache@v4
       with:
         path: sdk.tar.zst
-        key: sdk-tarball-openwrt-25.12.4-rockchip-armv8-v1
+        key: sdk-tarball-openwrt-25.12.4-rockchip-armv8-v2
 
     # ============================================
-    # 第4步：下载 SDK
-    #   只在缓存未命中时下载
+    # 第4步：下载 SDK（仅缓存未命中时）
     # ============================================
     - name: 下载 OpenWrt SDK
       if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -74,28 +87,26 @@ jobs:
       run: |
         rm -rf sdk
         mkdir -p sdk
-        echo "📂 解压 SDK（.tar.zst 格式）..."
+        echo "📂 解压 SDK..."
         tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
         echo "✅ 解压完成"
-        ls sdk/
 
     # ============================================
     # 第6步：克隆插件源码
-    #   从外部仓库获取 luci-app-dae 源码
     # ============================================
     - name: 克隆插件源码
       run: |
-        # 克隆插件仓库（ysuolmai 版本，包含 luci-app-dae 子目录）
         echo "📥 克隆插件源码..."
         git clone --depth 1 \
-          https://github.com/kozhini/luci-app-dae \
+          https://github.com/ysuolmai/luci-app-dae.git \
           /tmp/luci-app-dae-repo
 
         echo "仓库结构:"
         ls -la /tmp/luci-app-dae-repo/
-        echo ""
-        echo "luci-app-dae 子目录内容:"
-        ls -la /tmp/luci-app-dae-repo/luci-app-dae/
+        if [ -d /tmp/luci-app-dae-repo/luci-app-dae ]; then
+          echo "luci-app-dae 子目录:"
+          ls -la /tmp/luci-app-dae-repo/luci-app-dae/
+        fi
 
     # ============================================
     # 第7步：更新 feeds
@@ -107,104 +118,95 @@ jobs:
         ./scripts/feeds update -a >/dev/null 2>&1
         echo "📦 安装 feeds..."
         ./scripts/feeds install -a >/dev/null 2>&1
-        echo "✅ feeds 更新完成"
+        echo "✅ feeds 完成"
 
     # ============================================
-    # 第8步：放入插件源码（覆盖 feed 中的同名包）
-    #   参考你的 workflow，必须先删干净再拷贝，避免残留旧版本
+    # 第8步：放入插件源码
+    #   清理 feed 中同名包，只用我们自己的
     # ============================================
-    - name: 放入插件源码到 SDK
+    - name: 放入插件源码
       working-directory: sdk
       run: |
-        # ---- 删除 feed 中可能存在的同名包 ----
-        # ImmortalWrt/OpenWrt 的 luci feed 可能自带 luci-app-dae / luci-app-daed
-        # 不删干净的话会编译 feed 里的旧版本，而不是我们的
+        # ---- 清理 feed 中的同名包 ----
         rm -rf package/feeds/luci/luci-app-dae
         rm -rf feeds/luci/applications/luci-app-dae
         rm -rf package/feeds/luci/luci-app-daed
         rm -rf feeds/luci/applications/luci-app-daed
-        # 关键：package/ 下可能有缓存残留
         rm -rf package/luci-app-dae
 
-        # ---- 拷贝我们的插件源码 ----
-        # -rT: 递归拷贝，T 确保不会把源拷成子目录
-        cp -rT /tmp/luci-app-dae-repo/luci-app-dae package/luci-app-dae
+        # ---- 拷贝我们的源码 ----
+        if [ -d /tmp/luci-app-dae-repo/luci-app-dae ]; then
+          cp -rT /tmp/luci-app-dae-repo/luci-app-dae package/luci-app-dae
+        else
+          cp -rT /tmp/luci-app-dae-repo package/luci-app-dae
+        fi
 
         # ---- Patch：去掉 dae 运行时依赖 ----
-        # SDK 里没有 dae 二进制包，如果保留 +dae 依赖，
-        # defconfig 会因为找不到 dae 包而报错
-        # 实际安装时 dae 已由固件编译流程提供
-        if [ -f package/luci-app-dae/Makefile ]; then
-          sed -i 's/LUCI_DEPENDS:=+dae/LUCI_DEPENDS:=/' package/luci-app-dae/Makefile || true
+        # SDK 里没有 dae 二进制包，保留会导致 defconfig 找不到依赖
+        if grep -q '+dae' package/luci-app-dae/Makefile 2>/dev/null; then
+          sed -i 's/LUCI_DEPENDS:=+dae/LUCI_DEPENDS:=/' package/luci-app-dae/Makefile
           echo "✅ 已 patch Makefile（去掉 +dae 依赖）"
         fi
 
         echo ""
-        echo "插件目录内容:"
-        ls -la package/luci-app-dae/
-        echo ""
-        echo "Makefile 内容:"
+        echo "插件 Makefile:"
         cat package/luci-app-dae/Makefile
 
     # ============================================
-    # 第9步：配置 .config
-    #   25.12.4 默认使用 APK 包管理器，无需额外配置
+    # 第9步：配置
+    #   只选中我们要编译的包
     # ============================================
     - name: 配置编译选项
       working-directory: sdk
       run: |
-        # 写入最小配置：只编译我们需要的包
         cat > .config <<'EOF'
         CONFIG_PACKAGE_luci-app-dae=y
         CONFIG_PACKAGE_luci-i18n-dae-zh-cn=y
         EOF
 
-        # 让 SDK 根据目标架构自动补全其余配置
         make defconfig
 
         echo "✅ 配置完成"
         echo ""
-        echo "检查 dae 相关配置:"
-        grep -i "dae" .config || echo "⚠️ 未找到 dae 相关配置"
+        echo "dae 相关配置:"
+        grep -i "dae" .config || echo "⚠️ 未找到 dae 配置"
 
     # ============================================
     # 第10步：编译
+    #   修复：用 set -o pipefail 确保 make 失败时整个 step 也失败
     # ============================================
     - name: 编译 luci-app-dae
       working-directory: sdk
       run: |
+        set -o pipefail
+
         echo "🔨 开始编译..."
         echo "   目标: rockchip/armv8"
         echo "   并行线程: $(nproc)"
         echo ""
 
         make package/luci-app-dae/{clean,compile} V=s -j$(nproc) 2>&1 | tail -200
-
         echo ""
-        echo "✅ 编译完成"
+        echo "✅ 编译成功"
 
     # ============================================
     # 第11步：收集编译产物
-    #   25.12.4 产出 .apk 格式
     # ============================================
     - name: 收集编译产物
       run: |
         mkdir -p artifacts
 
         echo "🔍 搜索编译产物..."
-        echo ""
 
-        # 搜索 .apk 文件（25.12.4 默认格式）
-        echo "=== 搜索 .apk ==="
-        find sdk/bin -type f -name '*.apk' | grep -i dae | tee /dev/null | while read f; do
-          echo "  找到: $f"
+        # 搜索 .apk（25.12.4 默认格式）
+        find sdk/bin -type f -name '*.apk' 2>/dev/null | grep -i dae | while read f; do
+          echo "  📦 APK: $f"
           cp -v "$f" artifacts/
         done
 
-        # 兜底：也搜索 .ipk（以防万一）
-        echo "=== 搜索 .ipk（兜底）==="
-        find sdk/bin -type f -name '*.ipk' | grep -i dae | tee /dev/null | while read f; do
-          echo "  找到: $f"
+        # 兜底：也搜索 .ipk
+        find sdk/bin -type f -name '*.ipk' 2>/dev/null | grep -i dae | while read f; do
+          echo "  📦 IPK: $f"
           cp -v "$f" artifacts/
         done
 
@@ -214,16 +216,12 @@ jobs:
         echo "=========================================="
         ls -lh artifacts/
 
-        # 确保至少有一个产物
         if [ ! "$(ls -A artifacts/)" ]; then
           echo ""
-          echo "❌ 未找到任何编译产物！"
-          echo "列出 bin/ 下所有文件供排查:"
-          find sdk/bin -type f | head -50
+          echo "❌ 未找到编译产物"
           exit 1
         fi
 
-        echo ""
         echo "✅ 产物收集完成"
 
     # ============================================
@@ -238,20 +236,11 @@ jobs:
         retention-days: 90
 
     # ============================================
-    # 第13步：可选 - 发布到 Release
-    # ============================================
-    - name: 发布到 GitHub Release
-      if: github.event_name == 'release'
-      uses: softprops/action-gh-release@v2
-      with:
-        files: artifacts/*
-
-    # ============================================
-    # 第14步：清理
+    # 第13步：清理
     # ============================================
     - name: 清理工作空间
       if: always()
       run: |
         echo "🧹 清理..."
-        rm -rf sdk /tmp/luci-app-dae-repo
+        rm -rf sdk /tmp/luci-app-dae-repo artifacts
         echo "✅ 清理完成"
