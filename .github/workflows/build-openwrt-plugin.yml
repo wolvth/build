@@ -1,0 +1,203 @@
+# 文件路径: .github/workflows/build-openwrt-plugin.yml
+
+name: 编译OpenWrt LuCI插件 (ARM64)
+
+# 触发条件：推送到main分支，或手动触发
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      sdk_version:
+        description: 'OpenWrt SDK版本 (例如: 23.05.0)'
+        required: false
+        default: '25.12.4'
+      target_arch:
+        description: '目标架构 (例如: armvirt/64)'
+        required: false
+        default: 'armv8'
+      plugin_repo:
+        description: '插件仓库URL'
+        required: false
+        default: 'https://github.com/ysuolmai/luci-app-dae'
+
+env:
+  # 默认环境变量
+  SDK_VERSION: ${{ github.event.inputs.sdk_version || '23.05.0' }}
+  TARGET_ARCH: ${{ github.event.inputs.target_arch || 'armvirt/64' }}
+  PLUGIN_REPO: ${{ github.event.inputs.plugin_repo || 'https://github.com/ysuolmai/luci-app-dae' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+    # 1. 检出工作流代码
+    - name: 检出仓库代码
+      uses: actions/checkout@v4
+
+    # 2. 安装编译依赖
+    - name: 安装系统依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libncurses5-dev \
+          libncursesw5-dev \
+          zlib1g-dev \
+          gawk \
+          gettext \
+          libssl-dev \
+          xsltproc \
+          wget \
+          unzip \
+          python2 \
+          python3 \
+          git \
+          file \
+          rsync \
+          subversion
+        echo "系统依赖安装完成"
+
+    # 3. 设置环境变量
+    - name: 设置环境变量
+      run: |
+        # 创建工作目录
+        mkdir -p ~/openwrt-build
+        cd ~/openwrt-build
+        
+        # 设置SDK下载链接
+        # 注意：这里需要根据实际版本调整
+        SDK_URL="https://downloads.openwrt.org/releases/${SDK_VERSION}/targets/${TARGET_ARCH}/openwrt-sdk-${SDK_VERSION}-armvirt-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+        echo "SDK_URL=${SDK_URL}" >> $GITHUB_ENV
+        echo "构建目录: $(pwd)"
+        echo "SDK版本: ${SDK_VERSION}"
+        echo "目标架构: ${TARGET_ARCH}"
+        echo "插件仓库: ${PLUGIN_REPO}"
+
+    # 4. 下载并解压OpenWrt SDK
+    - name: 下载OpenWrt SDK
+      working-directory: ~/openwrt-build
+      run: |
+        echo "正在下载OpenWrt SDK..."
+        wget -qO- ${SDK_URL} | tar -xJf -
+        
+        # 重命名SDK目录
+        SDK_DIR=$(ls -d openwrt-sdk-* | head -1)
+        mv "${SDK_DIR}" sdk
+        
+        echo "SDK下载完成，目录结构:"
+        ls -la sdk/
+
+    # 5. 克隆插件源码
+    - name: 克隆插件源码
+      working-directory: ~/openwrt-build
+      run: |
+        # 克隆插件仓库到临时目录
+        git clone ${PLUGIN_REPO} temp_plugin
+        
+        # 检查是否存在luci-app-dae目录
+        if [ -d "temp_plugin/luci-app-dae" ]; then
+          echo "找到luci-app-dae子目录"
+          mv temp_plugin/luci-app-dae sdk/package/
+        elif [ -d "temp_plugin/luci-app-dae" ]; then
+          echo "找到luci-app-dae根目录"
+          mv temp_plugin/* sdk/package/luci-app-dae/
+        else
+          echo "警告：未找到标准插件目录结构"
+          # 直接复制整个仓库作为插件
+          mkdir -p sdk/package/luci-app-dae
+          cp -r temp_plugin/* sdk/package/luci-app-dae/
+        fi
+        
+        # 清理临时目录
+        rm -rf temp_plugin
+        
+        echo "插件源码已放置到SDK中"
+        ls -la sdk/package/luci-app-dae/
+
+    # 6. 配置OpenWrt SDK
+    - name: 配置OpenWrt SDK
+      working-directory: ~/openwrt-build/sdk
+      run: |
+        # 更新feeds
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        
+        # 创建基础配置
+        make defconfig
+        
+        # 确保目标架构正确
+        sed -i 's/CONFIG_TARGET_armvirt=y/# CONFIG_TARGET_armvirt is not set/' .config
+        echo "CONFIG_TARGET_armvirt=y" >> .config
+        echo "CONFIG_TARGET_armvirt_64=y" >> .config
+        
+        # 确保插件被选中编译
+        # 这里需要根据实际插件名称调整
+        if grep -q "CONFIG_PACKAGE_luci-app-dae" .config; then
+          sed -i 's/# CONFIG_PACKAGE_luci-app-dae is not set/CONFIG_PACKAGE_luci-app-dae=y/' .config
+        else
+          echo "CONFIG_PACKAGE_luci-app-dae=y" >> .config
+        fi
+        
+        echo "SDK配置完成"
+
+    # 7. 编译插件
+    - name: 编译插件
+      working-directory: ~/openwrt-build/sdk
+      run: |
+        echo "开始编译插件..."
+        # 使用-j参数并行编译，加快速度
+        # V=s显示详细编译信息
+        make package/luci-app-dae/compile -j$(nproc) V=s
+        
+        echo "编译完成！"
+        
+        # 检查编译结果
+        echo "查找编译产物..."
+        find bin/packages/ -name "*luci-app-dae*.ipk" -type f | head -20
+
+    # 8. 收集编译产物
+    - name: 收集编译产物
+      working-directory: ~/openwrt-build/sdk
+      run: |
+        # 创建输出目录
+        mkdir -p ~/artifacts
+        
+        # 查找并复制所有生成的ipk文件
+        find bin/packages/ -name "*luci-app-dae*.ipk" -exec cp {} ~/artifacts/ \;
+        
+        # 如果找不到ipk，尝试其他位置
+        if [ ! "$(ls -A ~/artifacts/)" ]; then
+          echo "尝试从其他位置查找编译产物..."
+          find bin/ -name "*dae*.ipk" -exec cp {} ~/artifacts/ \; 2>/dev/null || true
+          find bin/ -name "*luci*.ipk" -exec cp {} ~/artifacts/ \; 2>/dev/null || true
+        fi
+        
+        # 显示收集到的文件
+        echo "收集到的编译产物:"
+        ls -la ~/artifacts/
+        
+        # 如果没有找到任何文件，记录编译日志
+        if [ ! "$(ls -A ~/artifacts/)" ]; then
+          echo "警告：未找到编译产物，保存编译日志..."
+          mkdir -p ~/artifacts/logs
+          cp logs/*.log ~/artifacts/logs/ 2>/dev/null || true
+          echo "编译日志已保存到 ~/artifacts/logs/"
+        fi
+
+    # 9. 上传编译产物
+    - name: 上传编译产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: openwrt-plugin-${{ github.sha }}
+        path: ~/artifacts/
+        retention-days: 30
+
+    # 10. 清理工作空间
+    - name: 清理工作空间
+      if: always()
+      run: |
+        echo "清理临时文件..."
+        rm -rf ~/openwrt-build
+        rm -rf ~/artifacts
+        echo "清理完成"
