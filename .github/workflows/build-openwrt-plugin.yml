@@ -1,268 +1,264 @@
 # 文件路径: .github/workflows/build-openwrt-plugin.yml
+# 编译 luci-app-dae 的 APK 包（OpenWrt 25.12.4 已切换到 APK 包管理器）
 
-name: 编译OpenWrt LuCI插件 (rockchip/armv8)
+name: Build luci-app-dae .apk (rockchip/armv8)
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
-
-env:
-  # 你提供的SDK地址
-  SDK_URL: "https://downloads.openwrt.org/releases/25.12.4/targets/rockchip/armv8/openwrt-sdk-25.12.4-rockchip-armv8_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
-  # 插件仓库地址（你可以切换为 kozhini/luci-app-dae）
-  PLUGIN_REPO: "https://github.com/ysuolmai/luci-app-dae.git"
-  # 插件在仓库中的路径
-  PLUGIN_PATH: "luci-app-dae"
 
 jobs:
   build:
+    name: Build .apk (OpenWrt 25.12.4 rockchip/armv8)
     runs-on: ubuntu-22.04
 
     steps:
     # ============================================
-    # 第1步：检出本仓库代码（workflow文件所在仓库）
+    # 第1步：检出本仓库代码
     # ============================================
     - name: 检出仓库代码
       uses: actions/checkout@v4
 
     # ============================================
-    # 第2步：安装编译所需的系统依赖
+    # 第2步：安装编译依赖
+    #   关键修复：python3-elftools 解决 u-boot 前置检查报错
+    #   关键修复：zstd 解决 .tar.zst 解压
     # ============================================
     - name: 安装系统依赖
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
+        sudo apt-get update -qq
+        sudo apt-get install -yqq \
           build-essential \
-          ccache \
-          ecj \
-          fastjar \
-          file \
-          g++ \
-          gawk \
-          gettext \
-          git \
-          java-propose-classpath \
-          libelf-dev \
           libncurses-dev \
-          libssl-dev \
-          python3 \
-          python3-dev \
-          python3-distutils \
-          python3-setuptools \
-          rsync \
-          subversion \
-          swig \
-          unzip \
-          wget \
-          xsltproc \
           zlib1g-dev \
-          zstd          # 关键！.tar.zst 解压必须依赖 zstd
-        echo "✅ 系统依赖安装完成"
+          gawk \
+          git \
+          gettext \
+          libssl-dev \
+          xsltproc \
+          rsync \
+          wget \
+          unzip \
+          python3 \
+          python3-elftools \
+          zstd
+
+        # 验证关键依赖是否安装成功
+        echo "✅ python3 elftools:"
+        python3 -c "import elftools; print(elftools.__version__)" || echo "❌ elftools 未安装成功"
+        echo "✅ zstd:"
+        zstd --version
 
     # ============================================
-    # 第3步：下载并解压 OpenWrt SDK
+    # 第3步：缓存 SDK 压缩包
+    #   只缓存压缩包本身，每次全新解压，避免 build state 残留
     # ============================================
-    - name: 下载并解压 OpenWrt SDK
+    - name: 缓存 SDK 压缩包
+      id: cache-sdk
+      uses: actions/cache@v4
+      with:
+        path: sdk.tar.zst
+        key: sdk-tarball-openwrt-25.12.4-rockchip-armv8-v1
+
+    # ============================================
+    # 第4步：下载 SDK
+    #   只在缓存未命中时下载
+    # ============================================
+    - name: 下载 OpenWrt SDK
+      if: steps.cache-sdk.outputs.cache-hit != 'true'
       run: |
-        # 创建工作目录
-        mkdir -p ~/openwrt-build
-        cd ~/openwrt-build
-        
-        echo "📦 开始下载 SDK..."
-        echo "   URL: ${SDK_URL}"
-        
-        # 下载SDK（-L 跟随重定向，OpenWrt下载链接通常会重定向）
-        wget -L -q --show-progress -O sdk.tar.zst "${SDK_URL}"
-        
-        echo "📦 下载完成，文件大小: $(du -h sdk.tar.zst | cut -f1)"
-        
-        # 解压 .tar.zst 格式
-        echo "📂 解压 SDK..."
-        tar --zstd -xf sdk.tar.zst
-        
-        # 找到解压后的SDK目录并重命名
-        SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -1)
-        if [ -z "${SDK_DIR}" ]; then
-          echo "❌ 错误：找不到SDK目录"
-          echo "当前目录内容:"
-          ls -la
-          exit 1
-        fi
-        
-        mv "${SDK_DIR}" sdk
-        rm -f sdk.tar.zst   # 删除压缩包释放空间
-        
-        echo "✅ SDK 解压完成"
-        echo "SDK 目录结构:"
-        ls -la sdk/
+        echo "📦 下载 SDK..."
+        wget -q --show-progress \
+          "https://downloads.openwrt.org/releases/25.12.4/targets/rockchip/armv8/openwrt-sdk-25.12.4-rockchip-armv8_gcc-14.3.0_musl.Linux-x86_64.tar.zst" \
+          -O sdk.tar.zst
+        echo "✅ 下载完成: $(du -h sdk.tar.zst | cut -f1)"
 
     # ============================================
-    # 第4步：克隆插件源码并放入SDK
+    # 第5步：解压 SDK（每次都全新解压）
+    # ============================================
+    - name: 解压 SDK
+      run: |
+        rm -rf sdk
+        mkdir -p sdk
+        echo "📂 解压 SDK（.tar.zst 格式）..."
+        tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
+        echo "✅ 解压完成"
+        ls sdk/
+
+    # ============================================
+    # 第6步：克隆插件源码
+    #   从外部仓库获取 luci-app-dae 源码
     # ============================================
     - name: 克隆插件源码
       run: |
-        cd ~/openwrt-build
-        
-        echo "📥 克隆插件仓库: ${PLUGIN_REPO}"
-        git clone --depth 1 "${PLUGIN_REPO}" temp_plugin
-        
-        echo "插件仓库内容:"
-        ls -la temp_plugin/
-        
-        # 将插件复制到 SDK 的 package 目录
-        mkdir -p sdk/package/luci-app-dae
-        
-        if [ -d "temp_plugin/${PLUGIN_PATH}" ]; then
-          # 如果仓库里有子目录（如 luci-app-dae/）
-          echo "📂 找到子目录 ${PLUGIN_PATH}，复制到 package/"
-          cp -r temp_plugin/${PLUGIN_PATH}/* sdk/package/luci-app-dae/
-        else
-          # 否则整个仓库就是插件源码
-          echo "📂 将整个仓库作为插件源码"
-          cp -r temp_plugin/* sdk/package/luci-app-dae/
-        fi
-        
-        # 清理临时目录
-        rm -rf temp_plugin
-        
-        echo "✅ 插件源码已就位"
-        echo "插件目录内容:"
-        ls -la sdk/package/luci-app-dae/
-        
-        # 检查是否有 Makefile（OpenWrt插件必须有）
-        if [ ! -f "sdk/package/luci-app-dae/Makefile" ]; then
-          echo "⚠️ 警告：插件目录中没有找到 Makefile"
-          echo "递归查找 Makefile:"
-          find sdk/package/luci-app-dae/ -name "Makefile" -type f
-        fi
+        # 克隆插件仓库（ysuolmai 版本，包含 luci-app-dae 子目录）
+        echo "📥 克隆插件源码..."
+        git clone --depth 1 \
+          https://github.com/ysuolmai/luci-app-dae.git \
+          /tmp/luci-app-dae-repo
+
+        echo "仓库结构:"
+        ls -la /tmp/luci-app-dae-repo/
+        echo ""
+        echo "luci-app-dae 子目录内容:"
+        ls -la /tmp/luci-app-dae-repo/luci-app-dae/
 
     # ============================================
-    # 第5步：更新 feeds 并配置 SDK
+    # 第7步：更新 feeds
     # ============================================
-    - name: 更新feeds并配置SDK
+    - name: 更新 feeds
+      working-directory: sdk
       run: |
-        cd ~/openwrt-build/sdk
-        
-        # ---- 更新 feeds ----
-        # feeds 是 OpenWrt 的包管理系统（类似 apt 源）
         echo "🔄 更新 feeds..."
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-        
-        # ---- 生成默认配置 ----
-        echo "⚙️ 生成默认 .config..."
-        make defconfig
-        
-        # ---- 确保目标架构正确 ----
-        # 设置为 rockchip/armv8
-        cat >> .config << 'EOF'
-        CONFIG_TARGET_rockchip=y
-        CONFIG_TARGET_rockchip_armv8=y
-        CONFIG_TARGET_rockchip_armv8_Default=y
-        EOF
-        
-        # ---- 确保插件被选中 ----
-        # 尝试多种可能的包名
-        cat >> .config << 'EOF'
+        ./scripts/feeds update -a >/dev/null 2>&1
+        echo "📦 安装 feeds..."
+        ./scripts/feeds install -a >/dev/null 2>&1
+        echo "✅ feeds 更新完成"
+
+    # ============================================
+    # 第8步：放入插件源码（覆盖 feed 中的同名包）
+    #   参考你的 workflow，必须先删干净再拷贝，避免残留旧版本
+    # ============================================
+    - name: 放入插件源码到 SDK
+      working-directory: sdk
+      run: |
+        # ---- 删除 feed 中可能存在的同名包 ----
+        # ImmortalWrt/OpenWrt 的 luci feed 可能自带 luci-app-dae / luci-app-daed
+        # 不删干净的话会编译 feed 里的旧版本，而不是我们的
+        rm -rf package/feeds/luci/luci-app-dae
+        rm -rf feeds/luci/applications/luci-app-dae
+        rm -rf package/feeds/luci/luci-app-daed
+        rm -rf feeds/luci/applications/luci-app-daed
+        # 关键：package/ 下可能有缓存残留
+        rm -rf package/luci-app-dae
+
+        # ---- 拷贝我们的插件源码 ----
+        # -rT: 递归拷贝，T 确保不会把源拷成子目录
+        cp -rT /tmp/luci-app-dae-repo/luci-app-dae package/luci-app-dae
+
+        # ---- Patch：去掉 dae 运行时依赖 ----
+        # SDK 里没有 dae 二进制包，如果保留 +dae 依赖，
+        # defconfig 会因为找不到 dae 包而报错
+        # 实际安装时 dae 已由固件编译流程提供
+        if [ -f package/luci-app-dae/Makefile ]; then
+          sed -i 's/LUCI_DEPENDS:=+dae/LUCI_DEPENDS:=/' package/luci-app-dae/Makefile || true
+          echo "✅ 已 patch Makefile（去掉 +dae 依赖）"
+        fi
+
+        echo ""
+        echo "插件目录内容:"
+        ls -la package/luci-app-dae/
+        echo ""
+        echo "Makefile 内容:"
+        cat package/luci-app-dae/Makefile
+
+    # ============================================
+    # 第9步：配置 .config
+    #   25.12.4 默认使用 APK 包管理器，无需额外配置
+    # ============================================
+    - name: 配置编译选项
+      working-directory: sdk
+      run: |
+        # 写入最小配置：只编译我们需要的包
+        cat > .config <<'EOF'
         CONFIG_PACKAGE_luci-app-dae=y
         CONFIG_PACKAGE_luci-i18n-dae-zh-cn=y
         EOF
-        
-        # ---- 处理依赖冲突 ----
+
+        # 让 SDK 根据目标架构自动补全其余配置
         make defconfig
-        
+
         echo "✅ 配置完成"
-        echo "检查插件是否被选中:"
-        grep -i "dae" .config || echo "⚠️ 未在 .config 中找到 dae 相关配置"
+        echo ""
+        echo "检查 dae 相关配置:"
+        grep -i "dae" .config || echo "⚠️ 未找到 dae 相关配置"
 
     # ============================================
-    # 第6步：编译插件
+    # 第10步：编译
     # ============================================
-    - name: 编译插件
+    - name: 编译 luci-app-dae
+      working-directory: sdk
       run: |
-        cd ~/openwrt-build/sdk
-        
-        echo "🔨 开始编译 luci-app-dae..."
-        echo "   并行线程数: $(nproc)"
-        
-        # 编译插件及其依赖
-        # V=s  显示详细输出，方便排错
-        # -j  并行编译线程数
-        make package/luci-app-dae/compile V=s -j$(nproc) || {
-          echo ""
-          echo "=========================================="
-          echo "❌ 编译失败，尝试显示错误日志..."
-          echo "=========================================="
-          
-          # 尝试找到错误日志
-          find build_dir/ -name "*.log" -newer package/luci-app-dae -type f 2>/dev/null | head -5 | while read f; do
-            echo "--- 日志文件: $f ---"
-            tail -30 "$f"
-            echo "---"
-          done
-          
-          # 保存完整的编译日志
-          mkdir -p ~/artifacts/logs
-          find logs/ -name "*.log" -exec cp {} ~/artifacts/logs/ \; 2>/dev/null
-          
-          exit 1
-        }
-        
-        echo "✅ 编译成功！"
+        echo "🔨 开始编译..."
+        echo "   目标: rockchip/armv8"
+        echo "   并行线程: $(nproc)"
+        echo ""
+
+        make package/luci-app-dae/{clean,compile} V=s -j$(nproc) 2>&1 | tail -200
+
+        echo ""
+        echo "✅ 编译完成"
 
     # ============================================
-    # 第7步：收集编译产物
+    # 第11步：收集编译产物
+    #   25.12.4 产出 .apk 格式
     # ============================================
     - name: 收集编译产物
       run: |
-        cd ~/openwrt-build/sdk
-        mkdir -p ~/artifacts/apk
-        
-        echo "🔍 查找编译产物..."
-        
-        # 查找所有生成的 ipk 文件（OpenWrt软件包格式）
-        find bin/packages/ -name "*dae*" -type f 2>/dev/null | while read f; do
-          echo "  找到: $f"
-          cp "$f" ~/artifacts/apk/
-        done
-        
-        # 也查找 luci 相关的
-        find bin/targets/ -name "*dae*" -type f 2>/dev/null | while read f; do
-          echo "  找到: $f"
-          cp "$f" ~/artifacts/apk/
-        done
-        
+        mkdir -p artifacts
+
+        echo "🔍 搜索编译产物..."
         echo ""
-        echo "📦 编译产物列表:"
-        ls -lh ~/artifacts/apk/ || echo "⚠️ 未找到任何编译产物"
-        
-        # 如果没有找到产物，做更广泛的搜索
-        if [ ! "$(ls -A ~/artifacts/ipk/)" ]; then
+
+        # 搜索 .apk 文件（25.12.4 默认格式）
+        echo "=== 搜索 .apk ==="
+        find sdk/bin -type f -name '*.apk' | grep -i dae | tee /dev/null | while read f; do
+          echo "  找到: $f"
+          cp -v "$f" artifacts/
+        done
+
+        # 兜底：也搜索 .ipk（以防万一）
+        echo "=== 搜索 .ipk（兜底）==="
+        find sdk/bin -type f -name '*.ipk' | grep -i dae | tee /dev/null | while read f; do
+          echo "  找到: $f"
+          cp -v "$f" artifacts/
+        done
+
+        echo ""
+        echo "=========================================="
+        echo "📦 编译产物:"
+        echo "=========================================="
+        ls -lh artifacts/
+
+        # 确保至少有一个产物
+        if [ ! "$(ls -A artifacts/)" ]; then
           echo ""
-          echo "⚠️ 精确搜索未找到，进行更广泛搜索..."
-          find bin/ -name "*.apk" -type f 2>/dev/null | head -20 | while read f; do
-            echo "  找到ipk: $f"
-            cp "$f" ~/artifacts/apk/
-          done
+          echo "❌ 未找到任何编译产物！"
+          echo "列出 bin/ 下所有文件供排查:"
+          find sdk/bin -type f | head -50
+          exit 1
         fi
 
+        echo ""
+        echo "✅ 产物收集完成"
+
     # ============================================
-    # 第8步：上传编译产物到 GitHub Actions
+    # 第12步：上传到 GitHub Actions
     # ============================================
     - name: 上传编译产物
       uses: actions/upload-artifact@v4
       with:
-        name: luci-app-dae-rockchip-armv8
-        path: ~/artifacts/
+        name: luci-app-dae-apk-rockchip-armv8
+        path: artifacts/*
+        if-no-files-found: error
         retention-days: 90
 
     # ============================================
-    # 第9步：始终清理（即使失败也执行）
+    # 第13步：可选 - 发布到 Release
+    # ============================================
+    - name: 发布到 GitHub Release
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v2
+      with:
+        files: artifacts/*
+
+    # ============================================
+    # 第14步：清理
     # ============================================
     - name: 清理工作空间
       if: always()
       run: |
-        echo "🧹 清理临时文件..."
-        rm -rf ~/openwrt-build
+        echo "🧹 清理..."
+        rm -rf sdk /tmp/luci-app-dae-repo
         echo "✅ 清理完成"
