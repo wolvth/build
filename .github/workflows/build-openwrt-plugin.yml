@@ -168,49 +168,67 @@ jobs:
     - name: 放入插件源码
       working-directory: sdk
       run: |
-        # ---- 清理 feed 中可能存在的同名包 ----
-        # 用 || true 防止 rm 找不到文件时报错退出
-        rm -rf "package/feeds/luci/${PACKAGE_NAME}"          || true
-        rm -rf "feeds/luci/applications/${PACKAGE_NAME}"     || true
+        # ---- 清理 feed 中同名包 ----
+        rm -rf "package/feeds/luci/${PACKAGE_NAME}"           || true
+        rm -rf "feeds/luci/applications/${PACKAGE_NAME}"      || true
+        rm -rf "package/${PACKAGE_NAME}"                      || true
 
-        # 如果包名含 luci-app-xxx，也清理对应的 daed 变体
         BASE_NAME="${PACKAGE_NAME#luci-app-}"
-        rm -rf "package/feeds/luci/luci-app-${BASE_NAME}d"   || true
+        rm -rf "package/feeds/luci/luci-app-${BASE_NAME}d"    || true
         rm -rf "feeds/luci/applications/luci-app-${BASE_NAME}d" || true
 
-        # ---- 清理可能残留的旧源码 ----
-        rm -rf "package/${PACKAGE_NAME}"
-
-        # ---- 拷贝我们的源码 ----
+        # ---- 拷贝源码 ----
         if [ -n "${PLUGIN_SUBDIR}" ] && [ -d "/tmp/plugin-repo/${PLUGIN_SUBDIR}" ]; then
           cp -rT "/tmp/plugin-repo/${PLUGIN_SUBDIR}" "package/${PACKAGE_NAME}"
         else
           cp -rT /tmp/plugin-repo "package/${PACKAGE_NAME}"
         fi
 
-        # ---- 核心：删除 Makefile 中所有 LUCI_DEPENDS 行 ----
-        # 不管依赖是什么（+dae, +daed, +xxx），全部去掉
-        # 这样 SDK 里没有的运行时依赖不会阻碍编译
+        # ---- 删除 LUCI_DEPENDS ----
         MAKEFILE="package/${PACKAGE_NAME}/Makefile"
         if [ -f "${MAKEFILE}" ]; then
-          echo ""
-          echo "=== Makefile 修改前 ==="
-          cat "${MAKEFILE}"
-          echo ""
-
-          # 删除所有 LUCI_DEPENDS 行（包括 := 和 +=）
           sed -i '/^LUCI_DEPENDS:/d' "${MAKEFILE}"
-
-          echo "=== Makefile 修改后（已删除所有 LUCI_DEPENDS 行）==="
-          cat "${MAKEFILE}"
-          echo ""
-        else
-          echo "⚠️ 警告：未找到 ${MAKEFILE}"
-          echo "package/${PACKAGE_NAME}/ 目录内容:"
-          ls -la "package/${PACKAGE_NAME}/"
         fi
 
-        echo "✅ 插件源码就位"
+        # ============================================
+        # 核心修复：www/ → htdocs/
+        # luci.mk 的 Build/Prepare 阶段只会拷贝 htdocs/ 目录
+        #   for d in luasrc ucode htdocs root src; do ...
+        # 仓库用的是 www/，导致所有 JS 文件被忽略（404 的原因）
+        # htdocs/ 安装到设备后自动映射为 /www/
+        # ============================================
+        if [ -d "package/${PACKAGE_NAME}/www" ]; then
+          # 如果已经有 htdocs/，先合并再删除 www/
+          if [ -d "package/${PACKAGE_NAME}/htdocs" ]; then
+            echo "⚠️ 同时存在 www/ 和 htdocs/，合并内容..."
+            cp -rT "package/${PACKAGE_NAME}/www" "package/${PACKAGE_NAME}/htdocs"
+          else
+            echo "🔧 将 www/ 重命名为 htdocs/（luci.mk 兼容性修复）"
+            mv "package/${PACKAGE_NAME}/www" "package/${PACKAGE_NAME}/htdocs"
+          fi
+          echo "✅ www/ → htdocs/ 完成"
+        elif [ -d "package/${PACKAGE_NAME}/htdocs" ]; then
+          echo "ℹ️ 已经是 htdocs/，无需修改"
+        else
+          echo "⚠️ 没有 www/ 也没有 htdocs/，跳过"
+        fi
+
+        # ---- 调试：确认文件路径 ----
+        echo ""
+        echo "=========================================="
+        echo "📂 修复后的目录树:"
+        echo "=========================================="
+        find "package/${PACKAGE_NAME}" -type f | sort | head -80
+
+        # 确认 overview.js 路径正确
+        echo ""
+        echo "🔍 检查关键 JS 文件:"
+        if [ -f "package/${PACKAGE_NAME}/htdocs/luci-static/resources/view/dae/overview.js" ]; then
+          echo "  ✅ htdocs/luci-static/resources/view/dae/overview.js 存在"
+        else
+          echo "  ❌ overview.js 未找到，列出 view/ 目录:"
+          find "package/${PACKAGE_NAME}" -path "*/view/*" -type f
+        fi
 
 
 # ============================================
