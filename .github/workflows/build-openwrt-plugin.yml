@@ -88,7 +88,7 @@ jobs:
         # 克隆插件仓库（ysuolmai 版本，包含 luci-app-dae 子目录）
         echo "📥 克隆插件源码..."
         git clone --depth 1 \
-          https://github.com/ysuolmai/luci-app-dae.git \
+          https://github.com/kozhini/luci-app-dae \
           /tmp/luci-app-dae-repo
 
         echo "仓库结构:"
