@@ -98,7 +98,7 @@ jobs:
       run: |
         echo "📥 克隆插件源码..."
         git clone --depth 1 \
-          https://github.com/ysuolmai/luci-app-dae.git \
+          https://github.com/kozhini/luci-app-dae \
           /tmp/luci-app-dae-repo
 
         echo "仓库结构:"
