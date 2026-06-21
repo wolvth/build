@@ -41,14 +41,7 @@ jobs:
           wget \
           unzip \
           python3 \
-          python3-elftools \
           zstd
-
-        # 验证关键依赖是否安装成功
-        echo "✅ python3 elftools:"
-        python3 -c "import elftools; print(elftools.__version__)" || echo "❌ elftools 未安装成功"
-        echo "✅ zstd:"
-        zstd --version
 
     # ============================================
     # 第3步：缓存 SDK 压缩包
