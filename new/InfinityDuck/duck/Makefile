@@ -5,19 +5,19 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=duck
-# APK 版本号必须用下划线分隔 rc，例如 1.1.0_rc1
-PKG_VERSION:=2.0.0_rc1
+PKG_VERSION:=$(shell date "+%Y.%m.%d")
 PKG_RELEASE:=1
 
-UPSTREAM_VERSION:=2.0.0rc1
-
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).zip
-PKG_SOURCE_URL:=https://github.com/daeuniverse/dae/releases/download/v$(UPSTREAM_VERSION)/dae-full-src.zip?
-PKG_HASH:=d149f9c35fcc95d3a8c2f001294468833ba52d7b060d146d2a509257e0c96504
+PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+PKG_SOURCE_URL:=https://github.com/daeuniverse/dae.git
+#PKG_SOURCE_URL:=https://github.com/LostAttractor/dae.git
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_VERSION:=$(shell git ls-remote $(PKG_SOURCE_URL) HEAD | cut -c1-7)
+PKG_MIRROR_HASH:=
 
 PKG_LICENSE:=AGPL-3.0-only
 PKG_LICENSE_FILE:=LICENSE
-PKG_MAINTAINER:=JohnsonRan <me@ihtw.moe>
+PKG_MAINTAINER:=Tianling Shen <cnsztl@immortalwrt.org>
 
 PKG_BUILD_DEPENDS:=golang/host bpf-headers
 PKG_BUILD_PARALLEL:=1
@@ -26,15 +26,19 @@ PKG_BUILD_FLAGS:=no-mips16
 GO_PKG:=github.com/daeuniverse/dae
 GO_PKG_EXCLUDES:=control/kern/tests
 GO_PKG_LDFLAGS_X:= \
-	$(GO_PKG)/cmd.Version=$(PKG_VERSION) \
+	$(GO_PKG)/cmd.Version=$(PKG_SOURCE_VERSION) \
 	$(GO_PKG)/common/consts.MaxMatchSetLen_=1024
-GO_PKG_TAGS:=trace
+GO_PKG_TAGS:=embedallowed
+GO_PKG_TARGET_VARS:=$(filter-out CGO_ENABLED=%,$(GO_PKG_TARGET_VARS)) \
+	CGO_ENABLED=1 \
+	GOEXPERIMENT=greenteagc
 
 include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/bpf.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
-UNZIP_CMD:=unzip -q -d $(PKG_BUILD_DIR) $(DL_DIR)/$(PKG_SOURCE)
+GO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"
+TAR_CMD=$(HOST_TAR) -C $(BUILD_DIR)/ $(TAR_OPTIONS)
 
 define Package/duck/Default
   SECTION:=net
@@ -49,7 +53,7 @@ define Package/duck
   # You need enable KERNEL_DEBUG_INFO_BTF and KERNEL_BPF_EVENTS
   DEPENDS:=$(GO_ARCH_DEPENDS) $(BPF_DEPENDS)  \
     +ca-bundle +kmod-sched-core +kmod-sched-bpf +kmod-xdp-sockets-diag \
-    +kmod-veth
+    +kmod-veth +v2ray-geoip +v2ray-geosite
 endef
 
 define Package/duck-geoip
@@ -66,7 +70,7 @@ define Package/duck-geosite
   PKGARCH:=all
 endef
 
-define Package/duck/description
+define Package/dae/description
   dae, means goose, is a lightweight and high-performance transparent
   proxy solution.
 
@@ -78,16 +82,33 @@ define Package/duck/description
   loss and additional resource consumption for direct traffic.
 endef
 
-define Package/duck/conffiles
+
+
+define Package/dae/conffiles
 /etc/duck/config.dae
 /etc/config/duck
 endef
 
-duck_CFLAGS:= \
+define Build/Prepare
+	( \
+		rm -rf $(PKG_BUILD_DIR) && git clone $(PKG_SOURCE_URL) $(PKG_BUILD_DIR) && git -C $(PKG_BUILD_DIR) checkout main ; \
+		pushd $(PKG_BUILD_DIR) ; \
+		git submodule update --init ; \
+		go mod tidy ; \
+		popd ; \
+	)
+endef
+
+DUCK_CFLAGS:= \
 	-O2 -Wall -Werror \
 	-DMAX_MATCH_SET_LEN=1024 \
+	-D__UNROLL_ROUTE_LOOP \
 	-I$(BPF_HEADERS_DIR)/tools/lib \
 	-I$(BPF_HEADERS_DIR)/arch/$(BPF_KARCH)/include/asm/mach-generic
+
+ifneq ($(CONFIG_USE_MUSL),)
+  TARGET_CFLAGS += -D_LARGEFILE64_SOURCE
+endif
 
 define Build/Compile
 	( \
@@ -97,7 +118,7 @@ define Build/Compile
 		$(GO_PKG_BUILD_VARS) \
 		BPF_CLANG="$(CLANG)" \
 		BPF_STRIP_FLAG="-strip=$(LLVM_STRIP)" \
-		BPF_CFLAGS="$(duck_CFLAGS)" \
+		BPF_CFLAGS="$(DUCK_CFLAGS)" \
 		BPF_TARGET="bpfel,bpfeb" \
 		BPF_TRACE_TARGET="$(GO_ARCH)" ; \
 		go generate $(PKG_BUILD_DIR)/control/control.go ; \
