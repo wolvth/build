@@ -4,8 +4,7 @@
 name: Build OpenWrt LuCI Plugin
 
 on:
-  push:
-    branches: [main]
+
   workflow_dispatch:
     inputs:
       repo_url:
