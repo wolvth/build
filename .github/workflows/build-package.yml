@@ -292,8 +292,21 @@ jobs:
           echo "  🔨 编译: $PKG"
           echo "============================================"
 
+          # 确认源码存在
+          if [ ! -f "package/${PKG}/Makefile" ]; then
+            echo "❌ package/${PKG}/Makefile 不存在"
+            FAILED="${FAILED} ${PKG}"
+            continue
+          fi
+
+          # 先运行 prereq 和 scan（创建元数据，这是必须的）
+          echo "--- 初始化构建环境 ---"
+          make "package/${PKG}/compile" -n V=s 2>&1 | tail -5
+
+          # clean
           make "package/${PKG}/clean" V=s 2>/dev/null || true
 
+          # 实际编译
           echo "--- 开始编译 ---"
           make "package/${PKG}/compile" V=s -j$(nproc) 2>&1 | tail -200
           RC=${PIPESTATUS[0]}
