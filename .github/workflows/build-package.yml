@@ -77,15 +77,12 @@ jobs:
     # ── 2. 安装依赖 ──────────────────────────────────────────────
     - name: 安装系统依赖
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential clang flex bison g++ gawk \
-          gcc-multilib g++-multilib gettext git libelf-dev \
-          libssl-dev python3 python3-dev rsync unzip \
-          python3-pyelftools python3-dev python3-setuptools\
-          zlib1g-dev file wget qemu-utils zstd
+        sudo apt-get update -qq
+        sudo apt-get install -yqq \
+          build-essential libncurses-dev zlib1g-dev gawk git gettext \
+          libssl-dev xsltproc rsync wget unzip python3 python3-pyelftools \
+          python3-dev python3-setuptools zstd file
         echo "✅ 依赖就绪"
-
 
     # ── 3. 缓存 SDK ──────────────────────────────────────────────
     - name: 缓存 SDK 压缩包
@@ -259,25 +256,6 @@ jobs:
         grep 'CONFIG_PACKAGE_.*=y' .config | grep -v 'NOT_SET'
 
     # ── 10. 编译 ─────────────────────────────────────────────────
-    - name: 编译前验证
-      working-directory: sdk
-      run: |
-        echo "🔍 验证构建系统能否识别插件..."
-        while IFS=: read -r PKG _; do
-          [ -z "$PKG" ] && continue
-          echo ""
-          echo "── $PKG ──"
-          echo "目录: package/${PKG}"
-          ls -la "package/${PKG}/" 2>/dev/null || { echo "❌ 目录不存在"; continue; }
-          echo ""
-          echo "Makefile:"
-          cat "package/${PKG}/Makefile"
-          echo ""
-          echo "dry-run 测试:"
-          make "package/${PKG}/compile" -n 2>&1 | head -20
-          echo "exit: $?"
-        done < /tmp/plugin_list.txt
-
     - name: 编译插件
       working-directory: sdk
       run: |
@@ -299,9 +277,15 @@ jobs:
             continue
           fi
 
-          # 先运行 prereq 和 scan（创建元数据，这是必须的）
-          echo "--- 初始化构建环境 ---"
+          # 强制重新扫描包目录并生成元数据
+          echo "--- 刷新包元数据 ---"
+          rm -f tmp/.packageinfo tmp/.packagedeps tmp/.packageauxvars tmp/.config-package.in
           make "package/${PKG}/compile" -n V=s 2>&1 | tail -5
+
+          # 验证包是否被识别
+          echo "--- 检查包元数据 ---"
+          grep -c "Package:luci-app-dae" tmp/.packageinfo 2>/dev/null && echo "✅ 包已注册" || echo "❌ 包未注册"
+          grep "Package:luci-app-dae" tmp/.packageinfo 2>/dev/null | head -3
 
           # clean
           make "package/${PKG}/clean" V=s 2>/dev/null || true
