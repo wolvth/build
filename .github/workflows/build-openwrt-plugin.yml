@@ -89,6 +89,7 @@ jobs:
           python3-pyelftools \
           python3-dev \
           python3-setuptools \
+          dos2unix \
           zstd
 
         # 验证 pyelftools
@@ -229,7 +230,23 @@ jobs:
           find "package/${PACKAGE_NAME}" -path "*/view/*" -type f
         fi
 
+        # ---- 调试：确认文件路径 ----
+        echo ""
+        echo "=========================================="
+        echo "📂 修复后的目录树:"
+        echo "=========================================="
+        find "package/${PACKAGE_NAME}" -type f | sort | head -80
 
+        # 【新增修复 1】：强制转换换行符，防止 Windows CRLF 导致 Makefile 解析失败
+        find "package/${PACKAGE_NAME}" -type f -exec dos2unix {} +
+        
+        # 【新增修复 2】：删除 SDK 的包信息缓存，强制下方的 defconfig 重新扫描 package 目录
+        rm -rf tmp/
+        
+        # 【新增修复 3】：打印 Makefile 确认内容
+        echo "🔍 检查 Makefile 内容:"
+        cat "package/${PACKAGE_NAME}/Makefile"
+        
 # ============================================
 # 第10步：配置 .config（修复循环依赖）
 # ============================================
