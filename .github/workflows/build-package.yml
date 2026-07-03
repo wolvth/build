@@ -17,14 +17,13 @@ on:
       package_dir:
         description: '插件在仓库中的子目录 (留空=自动扫描所有插件)'
         required: false
-        default: 'new'
+        default: 'new/luci-app-dae'
       openwrt_version:
         description: 'OpenWrt 版本'
         required: true
         type: choice
         options:
           - '25.12.5'
-          - '24.10.5'
         default: '25.12.5'
       target_arch:
         description: '目标架构 (TARGET SUBTARGET)'
@@ -45,7 +44,7 @@ on:
 jobs:
   build:
     name: Build LuCI Plugins
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     env:
       FEED_NAME: custom_plugins
@@ -208,16 +207,26 @@ jobs:
           cp -rT "$SRC_DIR" "package/${PKG}"
           echo "  ✅ 源码已复制到 package/${PKG}"
 
-          # 修复 LUCI_DEPENDS（删除，避免依赖问题）
+          # 检查 Makefile 是否存在
           MAKEFILE="package/${PKG}/Makefile"
-          if [ -f "$MAKEFILE" ] && grep -q 'LUCI_DEPENDS' "$MAKEFILE"; then
+          if [ ! -f "$MAKEFILE" ]; then
+            echo "  ❌ 找不到 $MAKEFILE"
+            echo "  目录内容:"
+            ls -la "package/${PKG}/"
+            continue
+          fi
+
+          echo "  📄 Makefile 内容:"
+          cat "$MAKEFILE"
+          echo ""
+
+          # 修复 LUCI_DEPENDS（删除，避免依赖问题）
+          if grep -q 'LUCI_DEPENDS' "$MAKEFILE"; then
             sed -i '/^LUCI_DEPENDS:/d' "$MAKEFILE"
             echo "  ✅ 已删除 LUCI_DEPENDS"
           fi
 
           # 关键修复：www/ → htdocs/
-          # luci.mk 的 Build/Prepare 阶段只拷贝 htdocs/，不认 www/
-          # htdocs/ 安装到设备后自动映射为 /www/
           if [ -d "package/${PKG}/www" ]; then
             if [ -d "package/${PKG}/htdocs" ]; then
               echo "  ⚠️ 同时存在 www/ 和 htdocs/，合并..."
@@ -231,10 +240,29 @@ jobs:
             echo "  ℹ️ 已是 htdocs/，无需修改"
           fi
 
-          # 调试：显示最终目录结构
-          echo "  📂 目录结构:"
-          find "package/${PKG}" -type f | sort | sed 's/^/    /' | head -30
+          # 显示最终目录结构
+          echo "  📂 最终目录结构:"
+          find "package/${PKG}" -type f | sort | sed 's/^/    /'
 
+        done < /tmp/plugin_list.txt
+
+        echo ""
+        echo "=========================================="
+        echo "🔍 验证构建系统是否识别插件"
+        echo "=========================================="
+        while IFS=: read -r PKG _; do
+          [ -z "$PKG" ] && continue
+          if [ -d "package/${PKG}" ] && [ -f "package/${PKG}/Makefile" ]; then
+            echo "  ✅ package/${PKG}/ 存在"
+            # 检查 Makefile 是否有必要的 include
+            if grep -q 'include.*rules.mk' "package/${PKG}/Makefile"; then
+              echo "  ✅ 包含 rules.mk"
+            else
+              echo "  ⚠️ 缺少 include rules.mk"
+            fi
+          else
+            echo "  ❌ package/${PKG}/ 不存在"
+          fi
         done < /tmp/plugin_list.txt
 
     # ── 9. 配置编译 ──────────────────────────────────────────────
@@ -264,6 +292,37 @@ jobs:
         grep 'CONFIG_PACKAGE_.*=y' .config | grep -v 'NOT_SET'
 
     # ── 10. 编译插件 ─────────────────────────────────────────────
+    - name: 调试构建系统
+      working-directory: sdk
+      run: |
+        echo "=== SDK 根目录 ==="
+        ls -la
+        echo ""
+        echo "=== TOPDIR ==="
+        head -5 include/toplevel.mk 2>/dev/null || echo "(不存在)"
+        echo ""
+        echo "=== package/ 目录 ==="
+        ls package/ 2>/dev/null | head -20
+        echo ""
+        echo "=== 插件目录确认 ==="
+        while IFS=: read -r PKG _; do
+          [ -z "$PKG" ] && continue
+          echo "package/${PKG}:"
+          ls -la "package/${PKG}/" 2>/dev/null || echo "  不存在"
+          echo ""
+          echo "Makefile:"
+          cat "package/${PKG}/Makefile" 2>/dev/null || echo "  不存在"
+          echo ""
+        done < /tmp/plugin_list.txt
+        echo "=== 测试 make 目标 ==="
+        while IFS=: read -r PKG _; do
+          [ -z "$PKG" ] && continue
+          echo "尝试: make package/${PKG}/compile -n"
+          make "package/${PKG}/compile" -n 2>&1 | head -10
+          echo "exit: $?"
+          echo ""
+        done < /tmp/plugin_list.txt
+
     - name: 编译插件
       working-directory: sdk
       run: |
@@ -277,13 +336,24 @@ jobs:
           echo "  🔨 编译: $PKG"
           echo "============================================"
 
-          make "package/${PKG}/clean" V=s -j$(nproc) 2>/dev/null || true
+          # 检查目标是否存在
+          if [ ! -f "package/${PKG}/Makefile" ]; then
+            echo "❌ package/${PKG}/Makefile 不存在，跳过"
+            FAILED="${FAILED} ${PKG}"
+            continue
+          fi
 
-          if make "package/${PKG}/compile" V=s -j$(nproc) 2>&1 | tail -100; then
+          make "package/${PKG}/clean" V=s 2>/dev/null || true
+
+          echo "--- 开始编译 ---"
+          make "package/${PKG}/compile" V=s -j$(nproc) 2>&1 | tail -150
+          RC=${PIPESTATUS[0]}
+
+          if [ $RC -eq 0 ]; then
             echo "✅ $PKG 编译成功"
             SUCCESS="${SUCCESS} ${PKG}"
           else
-            echo "❌ $PKG 编译失败（继续编译其他插件）"
+            echo "❌ $PKG 编译失败 (exit code: $RC)"
             FAILED="${FAILED} ${PKG}"
           fi
 
@@ -299,10 +369,6 @@ jobs:
 
         echo "SUCCESS=$SUCCESS" >> $GITHUB_ENV
         echo "FAILED=$FAILED" >> $GITHUB_ENV
-
-        if [ -n "$FAILED" ]; then
-          echo "⚠️ 部分插件编译失败，但成功的产物仍会上传"
-        fi
 
     # ── 11. 收集产物 ─────────────────────────────────────────────
     - name: 收集编译产物
