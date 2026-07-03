@@ -6,41 +6,88 @@ on:
       repo_url:
         description: '插件仓库地址 (HTTPS)'
         required: true
-        default: 'https://github.com/wolvth/build'
+        default: https://github.com/wolvth/build.git'
       repo_branch:
         description: '仓库分支'
         required: false
         default: 'main'
       package_dir:
-        description: '插件在仓库中的子目录 (留空=仓库根目录)'
+        description: '插件在仓库中的子目录 (留空=编译所有包含Makefile的插件)'
         required: false
-        default: 'new/luci-app-dae'
-      openwrt_branch:
-        description: 'OpenWrt 分支 (openwrt-24.10 / openwrt-23.05 / main)'
-        required: false
-        default: 'openwrt-25.12'
-      target_arch:
-        description: '目标架构'
+        default: 'new'
+      openwrt_version:
+        description: 'OpenWrt 版本'
         required: true
         type: choice
         options:
-          - aarch64_generic        
-          - x86_64
-          - aarch64_cortex-a53
-          - aarch64_cortex-a72
-          - arm_cortex-a7_neon-vfpv4
-          - mipsel_24kc
-        default: 'aarch64_generic'
-
-env:
-  FEED_NAME: custom_plugins
+          - '25.12.5'
+          - '24.10.5'
+        default: '25.12.5'
+      target_arch:
+        description: '目标架构 (TARGET SUBTARGET)'
+        required: true
+        type: choice
+        options:
+          - 'rockchip armv8'
+          - 'x86 64'
+          - 'mediatek filogic'
+          - 'mediatek mt7622'
+          - 'qualcommax ipq807x'
+          - 'bcm27xx bcm2711'
+          - 'sunxi cortexa53'
+        default: 'rockchip armv8'
+      gcc_version:
+        description: 'GCC 版本 (查看 downloads.openwrt.org 确认)'
+        required: false
+        default: '14.3.0'
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+
+    env:
+      FEED_NAME: custom_plugins
+
     steps:
 
-    # ── 1. 准备编译环境 ──────────────────────────────────────────
+    # ── 1. 解析架构参数 ──────────────────────────────────────────
+    - name: 解析参数
+      run: |
+        TARGET=$(echo "${{ inputs.target_arch }}" | awk '{print $1}')
+        SUBTARGET=$(echo "${{ inputs.target_arch }}" | awk '{print $2}')
+        VERSION="${{ inputs.openwrt_version }}"
+
+        GCC="${{ inputs.gcc_version }}"
+        GCC="${GCC:-14.3.0}"
+
+        # 尝试多种文件名格式
+        SDK_URL=""
+        for suffix in "gcc-${GCC}_musl" "musl"; do
+          CANDIDATE="openwrt-sdk-${VERSION}-${TARGET}-${SUBTARGET}_${suffix}.Linux-x86_64.tar.zst"
+          FULL_URL="https://downloads.openwrt.org/releases/${VERSION}/targets/${TARGET}/${SUBTARGET}/${CANDIDATE}"
+          echo "🔍 尝试: $FULL_URL"
+          if wget --spider -q "$FULL_URL" 2>/dev/null; then
+            SDK_URL="$FULL_URL"
+            SDK_FILE="$CANDIDATE"
+            break
+          fi
+        done
+
+        if [ -z "$SDK_URL" ]; then
+          echo "❌ 找不到 SDK 文件"
+          echo "请检查: https://downloads.openwrt.org/releases/${VERSION}/targets/${TARGET}/${SUBTARGET}/"
+          echo "可能需要调整 GCC 版本参数"
+          exit 1
+        fi
+
+        echo "TARGET=$TARGET" >> $GITHUB_ENV
+        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+        echo "SDK_URL=$SDK_URL" >> $GITHUB_ENV
+        echo "SDK_FILE=$SDK_FILE" >> $GITHUB_ENV
+
+        echo "📦 SDK: $SDK_URL"
+
+    # ── 2. 安装依赖 ─────────────────────────────────────────────
     - name: 安装编译依赖
       run: |
         sudo apt-get update
@@ -51,160 +98,148 @@ jobs:
           python3-pyelftools python3-dev python3-setuptools\
           zlib1g-dev file wget qemu-utils zstd
 
-    # ── 2. 获取 OpenWrt 源码 ─────────────────────────────────────
-    - name: 克隆 OpenWrt
+    # ── 3. 下载并解压 SDK ────────────────────────────────────────
+    - name: 下载 OpenWrt SDK
       run: |
-        git clone --depth 1 --branch ${{ inputs.openwrt_branch }} \
-          https://github.com/openwrt/openwrt.git openwrt
+        echo "📥 下载 SDK..."
+        wget -q --show-progress "$SDK_URL" -O "$SDK_FILE"
 
-    # ── 3. 获取插件源码 ──────────────────────────────────────────
+        echo "📂 解压 SDK..."
+        tar --use-compress-program=unzstd -xf "$SDK_FILE"
+        mv openwrt-sdk-* openwrt-sdk
+        rm -f "$SDK_FILE"
+
+        echo "✅ SDK 就绪"
+        ls openwrt-sdk/
+
+    # ── 4. 获取插件源码 ──────────────────────────────────────────
     - name: 克隆插件仓库
       run: |
         git clone --depth 1 --branch ${{ inputs.repo_branch }} \
           ${{ inputs.repo_url }} plugin_repo
 
-        echo "=== 仓库内容 ==="
-        ls -la plugin_repo/
+        echo "=== 仓库结构 ==="
+        find plugin_repo -maxdepth 3 -type d | sort
+        echo ""
 
-        # 确定插件目录
+        # 收集所有插件目录（包含 Makefile 且有 PKG_NAME 的目录）
         PKG_DIR="${{ inputs.package_dir }}"
-        if [ -z "$PKG_DIR" ]; then
-          # 使用仓库根目录
-          PLUGIN_SRC="plugin_repo"
+        PLUGIN_DIRS=()
+
+        if [ -n "$PKG_DIR" ]; then
+          # 指定了子目录，从该子目录下找
+          SEARCH_ROOT="plugin_repo/${PKG_DIR}"
+          if [ ! -d "$SEARCH_ROOT" ]; then
+            echo "❌ 目录不存在: $PKG_DIR"
+            find plugin_repo -maxdepth 2 -type d | sort
+            exit 1
+          fi
         else
-          PLUGIN_SRC="plugin_repo/${PKG_DIR}"
+          # 没指定，搜索整个仓库
+          SEARCH_ROOT="plugin_repo"
         fi
 
-        if [ ! -d "$PLUGIN_SRC" ]; then
-          echo "❌ 找不到目录: $PKG_DIR"
-          echo "仓库根目录内容:"
-          ls -la plugin_repo/
+        # 查找所有包含 Makefile + PKG_NAME 的目录
+        while IFS= read -r makefile; do
+          dir=$(dirname "$makefile")
+          if grep -q 'PKG_NAME' "$makefile" 2>/dev/null; then
+            PLUGIN_DIRS+=("$dir")
+            PKG=$(grep -m1 'PKG_NAME' "$makefile" | sed 's/.*:=\s*//')
+            echo "📦 发现插件: $PKG ($dir)"
+          fi
+        done < <(find "$SEARCH_ROOT" -maxdepth 3 -name 'Makefile')
+
+        if [ ${#PLUGIN_DIRS[@]} -eq 0 ]; then
+          echo "❌ 未找到任何插件（需要包含 PKG_NAME 的 Makefile）"
+          find "$SEARCH_ROOT" -maxdepth 3 -name 'Makefile' | head -10
           exit 1
         fi
 
-        echo "=== 插件目录内容 ==="
-        ls -la "$PLUGIN_SRC/"
+        echo ""
+        echo "共发现 ${#PLUGIN_DIRS[@]} 个插件"
 
-        # 检查是否有 Makefile
-        if [ ! -f "$PLUGIN_SRC/Makefile" ]; then
-          echo "⚠️  警告: 插件目录中没有 Makefile"
-          # 检查子目录
-          find "$PLUGIN_SRC" -name "Makefile" -maxdepth 3 | head -5
-        fi
+        # 保存插件目录列表
+        printf '%s\n' "${PLUGIN_DIRS[@]}" > /tmp/plugin_dirs.txt
 
-        # 如果子目录中只有一个目录且包含 Makefile，自动深入
-        if [ ! -f "$PLUGIN_SRC/Makefile" ]; then
-          SUBDIRS=$(find "$PLUGIN_SRC" -maxdepth 1 -mindepth 1 -type d)
-          SUBCOUNT=$(echo "$SUBDIRS" | wc -l)
-          if [ "$SUBCOUNT" = "1" ] && [ -f "$SUBDIRS/Makefile" ]; then
-            echo "自动深入子目录: $SUBDIRS"
-            PLUGIN_SRC="$SUBDIRS"
-          fi
-        fi
-
-        echo "PLUGIN_SRC=$PLUGIN_SRC" >> $GITHUB_ENV
-
-    # ── 4. 集成插件到 OpenWrt 构建系统 ───────────────────────────
+    # ── 5. 集成插件到 SDK ────────────────────────────────────────
     - name: 集成插件
       run: |
-        cd openwrt
+        cd openwrt-sdk
 
-        # 复制插件到 feeds 目录
+        # 复制所有插件目录
         mkdir -p feeds/${{ env.FEED_NAME }}
-        cp -a "$PLUGIN_SRC" feeds/${{ env.FEED_NAME }}/
+        while IFS= read -r dir; do
+          cp -a "$dir" feeds/${{ env.FEED_NAME }}/
+          PKG=$(grep -m1 'PKG_NAME' "$dir/Makefile" | sed 's/.*:=\s*//')
+          echo "✅ 已添加: $PKG"
+        done < /tmp/plugin_dirs.txt
 
-        # 查找所有插件目录（支持一个仓库包含多个插件）
-        echo "=== 已添加的插件 ==="
-        find feeds/${{ env.FEED_NAME }} -name "Makefile" -maxdepth 3 \
-          -exec grep -l "LUCI_TITLE\|PKG_NAME" {} \; | while read f; do
-            PKG=$(grep -m1 'PKG_NAME' "$f" | sed 's/.*:=\s*//')
-            echo "  📦 $PKG ($(dirname $f))"
-          done
+        # 注册 feed
+        echo "src-link ${{ env.FEED_NAME }} $(pwd)/feeds/${{ env.FEED_NAME }}" >> feeds.conf.default
 
         # 更新 feeds
-        echo "src-link ${{ env.FEED_NAME }} $(pwd)/feeds/${{ env.FEED_NAME }}" >> feeds.conf.default
         ./scripts/feeds update ${{ env.FEED_NAME }}
         ./scripts/feeds install -a -p ${{ env.FEED_NAME }}
 
-        # 检查插件是否被识别
-        echo "=== 已安装的自定义插件 ==="
-        ./scripts/feeds list -p ${{ env.FEED_NAME }} 2>/dev/null || echo "(feeds list 不可用)"
+        echo ""
+        echo "=== 已安装的插件 ==="
+        ./scripts/feeds list -p ${{ env.FEED_NAME }} 2>/dev/null || true
 
-    # ── 5. 配置编译目标 ──────────────────────────────────────────
-    - name: 配置 .config
+    # ── 6. 配置编译选项 ──────────────────────────────────────────
+    - name: 配置编译
       run: |
-        cd openwrt
+        cd openwrt-sdk
 
-        # 下载目标架构的默认配置
-        # 这里使用最小配置，只编译需要的包
+        # 生成最小配置
         cat > .config << EOF
-        CONFIG_TARGET_${{ inputs.target_arch }}=y
         CONFIG_PACKAGE_luci=y
         CONFIG_PACKAGE_luci-base=y
         CONFIG_PACKAGE_luci-compat=y
-        CONFIG_PACKAGE_luci-lib-ipkg=y
         EOF
 
         # 自动勾选所有自定义插件
-        find feeds/${{ env.FEED_NAME }} -name "Makefile" -maxdepth 3 \
-          -exec grep -l "PKG_NAME" {} \; | while read f; do
-            PKG=$(grep -m1 'PKG_NAME' "$f" | sed 's/.*:=\s*//')
-            echo "CONFIG_PACKAGE_${PKG}=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-${PKG#luci-app-}-zh-cn=y" >> .config
-          done
+        while IFS= read -r dir; do
+          PKG=$(grep -m1 'PKG_NAME' "$dir/Makefile" | sed 's/.*:=\s*//')
+          echo "CONFIG_PACKAGE_${PKG}=y" >> .config
+          # 尝试添加中文语言包
+          SHORT=${PKG#luci-app-}
+          echo "CONFIG_PACKAGE_luci-i18n-${SHORT}-zh-cn=y" >> .config
+        done < /tmp/plugin_dirs.txt
 
-        # 解决依赖
         make defconfig
 
-    # ── 6. 下载工具链和源码 ──────────────────────────────────────
-    - name: 下载源码
-      run: |
-        cd openwrt
-        make download -j$(nproc) || true
-        find dl -size -1024c -delete 2>/dev/null || true
+        echo "=== 编译配置 ==="
+        grep -E '^CONFIG_PACKAGE_' .config | grep '=y$' | grep -v 'NOT_SET'
 
-    # ── 7. 编译插件（仅编译包，不编译固件） ────────────────────────
+    # ── 7. 编译插件 ──────────────────────────────────────────────
     - name: 编译插件
       run: |
-        cd openwrt
+        cd openwrt-sdk
 
-        # 只编译工具链 + 目标包（不编译完整固件，节省时间）
-        make tools/install -j$(nproc) || make tools/install -j1 V=s
-        make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
-
-        # 编译所有自定义插件
-        find feeds/${{ env.FEED_NAME }} -name "Makefile" -maxdepth 3 \
-          -exec grep -l "PKG_NAME" {} \; | while read f; do
-            PKG=$(grep -m1 'PKG_NAME' "$f" | sed 's/.*:=\s*//')
-            echo "============================================"
-            echo "  编译: $PKG"
-            echo "============================================"
-            make package/${PKG}/compile -j1 V=s || {
-              echo "❌ $PKG 编译失败"
-              exit 1
-            }
-          done
+        # SDK 已有工具链，直接编译包
+        while IFS= read -r dir; do
+          PKG=$(grep -m1 'PKG_NAME' "$dir/Makefile" | sed 's/.*:=\s*//')
+          echo ""
+          echo "============================================"
+          echo "  🔨 编译: $PKG"
+          echo "============================================"
+          make package/${PKG}/compile -j$(nproc) V=s
+          echo "✅ $PKG 编译完成"
+        done < /tmp/plugin_dirs.txt
 
     # ── 8. 收集产物 ──────────────────────────────────────────────
     - name: 收集编译产物
       run: |
-        cd openwrt
+        cd openwrt-sdk
         mkdir -p ${{ github.workspace }}/output
 
-        # 查找所有编译出的包文件
-        find bin/packages/ -name "*.ipk" -o -name "*.apk" 2>/dev/null | \
-          while read f; do
-            cp "$f" ${{ github.workspace }}/output/
-            echo "📦 $(basename $f)"
-          done
+        # 收集所有 ipk/apk
+        find bin/ -name "*.ipk" -o -name "*.apk" 2>/dev/null | while read f; do
+          cp "$f" ${{ github.workspace }}/output/
+          echo "📦 $(basename $f)"
+        done
 
-        # 也查找 targets 下的包
-        find bin/targets/ -name "*.ipk" -o -name "*.apk" 2>/dev/null | \
-          while read f; do
-            cp "$f" ${{ github.workspace }}/output/
-            echo "📦 $(basename $f)"
-          done
-
+        echo ""
         echo "=== 所有产物 ==="
         ls -lh ${{ github.workspace }}/output/
 
