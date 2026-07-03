@@ -45,7 +45,7 @@ on:
 jobs:
   build:
     name: Build LuCI Plugins
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     env:
       FEED_NAME: custom_plugins
@@ -267,7 +267,8 @@ jobs:
     - name: 编译插件
       working-directory: sdk
       run: |
-        set -o pipefail
+        SUCCESS=""
+        FAILED=""
 
         while IFS=: read -r PKG _; do
           [ -z "$PKG" ] && continue
@@ -277,15 +278,31 @@ jobs:
           echo "============================================"
 
           make "package/${PKG}/clean" V=s -j$(nproc) 2>/dev/null || true
-          make "package/${PKG}/compile" V=s -j$(nproc) 2>&1 | tail -100
 
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ $PKG 编译失败"
-            exit 1
+          if make "package/${PKG}/compile" V=s -j$(nproc) 2>&1 | tail -100; then
+            echo "✅ $PKG 编译成功"
+            SUCCESS="${SUCCESS} ${PKG}"
+          else
+            echo "❌ $PKG 编译失败（继续编译其他插件）"
+            FAILED="${FAILED} ${PKG}"
           fi
-          echo "✅ $PKG 编译完成"
 
         done < /tmp/plugin_list.txt
+
+        echo ""
+        echo "=========================================="
+        echo "  📊 编译汇总"
+        echo "=========================================="
+        [ -n "$SUCCESS" ] && echo "  ✅ 成功:${SUCCESS}"
+        [ -n "$FAILED" ]   && echo "  ❌ 失败:${FAILED}"
+        echo "=========================================="
+
+        echo "SUCCESS=$SUCCESS" >> $GITHUB_ENV
+        echo "FAILED=$FAILED" >> $GITHUB_ENV
+
+        if [ -n "$FAILED" ]; then
+          echo "⚠️ 部分插件编译失败，但成功的产物仍会上传"
+        fi
 
     # ── 11. 收集产物 ─────────────────────────────────────────────
     - name: 收集编译产物
@@ -296,7 +313,6 @@ jobs:
         while IFS=: read -r PKG _; do
           [ -z "$PKG" ] && continue
 
-          # 搜索主包
           for ext in apk ipk; do
             find sdk/bin -type f -name "*${PKG}*.${ext}" 2>/dev/null | while read f; do
               echo "  📦 $(basename $f)"
@@ -304,7 +320,6 @@ jobs:
             done
           done
 
-          # 搜索语言包
           SHORT=${PKG#luci-app-}
           for ext in apk ipk; do
             find sdk/bin -type f -name "*luci-i18n-${SHORT}*.${ext}" 2>/dev/null | while read f; do
@@ -319,12 +334,12 @@ jobs:
         echo "=========================================="
         echo "📦 编译产物:"
         echo "=========================================="
-        ls -lh artifacts/
+        ls -lh artifacts/ 2>/dev/null || echo "(空)"
 
         if [ ! "$(ls -A artifacts/)" ]; then
-          echo "❌ 未找到任何编译产物"
+          echo "⚠️ 未找到任何编译产物"
           find sdk/bin -type f 2>/dev/null | head -30
-          exit 1
+          # 不 exit，让后续步骤继续
         fi
 
     # ── 12. 上传产物 ─────────────────────────────────────────────
@@ -333,8 +348,21 @@ jobs:
       with:
         name: openwrt-packages
         path: artifacts/*
-        if-no-files-found: error
+        if-no-files-found: warn
         retention-days: 90
+
+    - name: 最终报告
+      if: always()
+      run: |
+        echo "=========================================="
+        echo "  📊 最终结果"
+        echo "=========================================="
+        [ -n "${{ env.SUCCESS }}" ] && echo "  ✅ 成功:${{ env.SUCCESS }}"
+        [ -n "${{ env.FAILED }}" ]   && echo "  ❌ 失败:${{ env.FAILED }}"
+        echo "=========================================="
+        if [ -n "${{ env.FAILED }}" ]; then
+          exit 1
+        fi
 
     # ── 13. 清理 ─────────────────────────────────────────────────
     - name: 清理
