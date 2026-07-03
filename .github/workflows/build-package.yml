@@ -238,83 +238,37 @@ jobs:
       working-directory: sdk
       run: |
         cat > .config <<EOF
-        CONFIG_PACKAGE_luci=y
-        CONFIG_PACKAGE_luci-base=y
-        CONFIG_PACKAGE_luci-compat=y
+        CONFIG_PACKAGE_${PKG}=y
         EOF
-
-        while IFS=: read -r PKG _; do
-          [ -z "$PKG" ] && continue
-          echo "CONFIG_PACKAGE_${PKG}=y" >> .config
-          SHORT=${PKG#luci-app-}
-          echo "CONFIG_PACKAGE_luci-i18n-${SHORT}-zh-cn=y" >> .config
-        done < /tmp/plugin_list.txt
 
         make defconfig || true
 
-        echo "✅ 编译配置:"
-        grep 'CONFIG_PACKAGE_.*=y' .config | grep -v 'NOT_SET'
+        echo "✅ 配置完成"
+        grep -i "${PKG}" .config || echo "⚠️ 未找到 ${PKG}"
 
     # ── 10. 编译 ─────────────────────────────────────────────────
     - name: 编译插件
       working-directory: sdk
       run: |
         set -o pipefail
-        SUCCESS=""
-        FAILED=""
 
-        while IFS=: read -r PKG _; do
-          [ -z "$PKG" ] && continue
-          echo ""
-          echo "============================================"
-          echo "  🔨 编译: $PKG"
-          echo "============================================"
+        echo "🔨 开始编译 ${PKG}..."
+        echo "   目标: rockchip/armv8"
+        echo "   并行: $(nproc) 线程"
+        echo ""
 
-          # 确认源码存在
-          if [ ! -f "package/${PKG}/Makefile" ]; then
-            echo "❌ package/${PKG}/Makefile 不存在"
-            FAILED="${FAILED} ${PKG}"
-            continue
-          fi
-
-          # 强制重新扫描包目录并生成元数据
-          echo "--- 刷新包元数据 ---"
-          rm -f tmp/.packageinfo tmp/.packagedeps tmp/.packageauxvars tmp/.config-package.in
-          make "package/${PKG}/compile" -n V=s 2>&1 | tail -5
-
-          # 验证包是否被识别
-          echo "--- 检查包元数据 ---"
-          grep -c "Package:luci-app-dae" tmp/.packageinfo 2>/dev/null && echo "✅ 包已注册" || echo "❌ 包未注册"
-          grep "Package:luci-app-dae" tmp/.packageinfo 2>/dev/null | head -3
-
-          # clean
-          make "package/${PKG}/clean" V=s 2>/dev/null || true
-
-          # 实际编译
-          echo "--- 开始编译 ---"
-          make "package/${PKG}/compile" V=s -j$(nproc) 2>&1 | tail -200
-          RC=${PIPESTATUS[0]}
-
-          if [ $RC -eq 0 ]; then
-            echo "✅ $PKG 编译成功"
-            SUCCESS="${SUCCESS} ${PKG}"
-          else
-            echo "❌ $PKG 编译失败 (exit: $RC)"
-            FAILED="${FAILED} ${PKG}"
-          fi
-
-        done < /tmp/plugin_list.txt
+        # 先 clean 再 compile，分成两条命令
+        # 不能写成 {clean,compile} 并加引号，否则 bash 不会展开花括号
+        make package/${PKG}/clean V=s -j$(nproc) || true
 
         echo ""
-        echo "=========================================="
-        echo "  📊 编译汇总"
-        echo "=========================================="
-        [ -n "$SUCCESS" ] && echo "  ✅ 成功:${SUCCESS}"
-        [ -n "$FAILED" ]   && echo "  ❌ 失败:${FAILED}"
-        echo "=========================================="
+        echo "=== 开始编译 ==="
+        echo ""
 
-        echo "SUCCESS=$SUCCESS" >> $GITHUB_ENV
-        echo "FAILED=$FAILED" >> $GITHUB_ENV
+        make package/${PKG}/compile V=s -j$(nproc) 2>&1 | tail -200
+
+        echo ""
+        echo "✅ 编译成功"
 
     # ── 11. 收集产物 ─────────────────────────────────────────────
     - name: 收集编译产物
@@ -352,17 +306,6 @@ jobs:
         path: artifacts/*
         if-no-files-found: warn
         retention-days: 90
-
-    - name: 最终报告
-      if: always()
-      run: |
-        echo "=========================================="
-        echo "  📊 最终结果"
-        echo "=========================================="
-        [ -n "${{ env.SUCCESS }}" ] && echo "  ✅ 成功:${{ env.SUCCESS }}"
-        [ -n "${{ env.FAILED }}" ]   && echo "  ❌ 失败:${{ env.FAILED }}"
-        echo "=========================================="
-        [ -n "${{ env.FAILED }}" ] && exit 1 || exit 0
 
     - name: 清理
       if: always()
