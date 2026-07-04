@@ -1,6 +1,3 @@
-# .github/workflows/build-package.yml
-# 通用 OpenWrt LuCI 插件编译器（基于 SDK）
-
 name: Build OpenWrt Plugin
 
 on:
@@ -17,151 +14,94 @@ on:
       package_dir:
         description: '插件在仓库中的子目录 (留空=仓库根目录)'
         required: false
-        default: 'new/luci-app-dae'
+        default: 'new'
       openwrt_version:
         description: 'OpenWrt 版本'
         required: true
         type: choice
-        options:
-          - '25.12.5'
-          - '24.10.5'
+        options: ['25.12.5', '24.10.5']
         default: '25.12.5'
       target_arch:
         description: '目标架构'
         required: true
         type: choice
-        options:
-          - 'rockchip armv8'
-          - 'x86 64'
-          - 'mediatek filogic'
-          - 'mediatek mt7622'
-          - 'qualcommax ipq807x'
+        options: ['rockchip armv8', 'x86 64', 'mediatek filogic', 'mediatek mt7622', 'qualcommax ipq807x']
         default: 'rockchip armv8'
-      gcc_version:
-        description: 'GCC 版本 (留空自动尝试)'
-        required: false
-        default: '14.3.0'
 
 jobs:
   build:
-    name: Build LuCI Plugin (.apk)
     runs-on: ubuntu-24.04
 
     steps:
+      - name: 解析参数
+        run: |
+          TARGET=$(echo "${{ inputs.target_arch }}" | awk '{print $1}')
+          SUBTARGET=$(echo "${{ inputs.target_arch }}" | awk '{print $2}')
+          GCC="${{ inputs.gcc_version }}"
+          GCC="${GCC:-14.3.0}"
 
-    # ── 1. 解析参数 ──────────────────────────────────────────────
-    - name: 解析参数
-      run: |
-        TARGET=$(echo "${{ inputs.target_arch }}" | awk '{print $1}')
-        SUBTARGET=$(echo "${{ inputs.target_arch }}" | awk '{print $2}')
-        VERSION="${{ inputs.openwrt_version }}"
-        GCC="${{ inputs.gcc_version }}"
-        GCC="${GCC:-14.3.0}"
+          echo "TARGET=$TARGET"         >> $GITHUB_ENV
+          echo "SUBTARGET=$SUBTARGET"   >> $GITHUB_ENV
+          echo "VERSION=${{ inputs.openwrt_version }}" >> $GITHUB_ENV
+          echo "GCC=$GCC"               >> $GITHUB_ENV
 
-        echo "TARGET=$TARGET" >> $GITHUB_ENV
-        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "GCC=$GCC" >> $GITHUB_ENV
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -yqq build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 python3-pyelftools zstd
+          echo "✅ 依赖就绪"
 
-        SDK_BASE="https://downloads.openwrt.org/releases/${VERSION}/targets/${TARGET}/${SUBTARGET}"
-        echo "SDK_BASE=$SDK_BASE" >> $GITHUB_ENV
+      - name: 下载 SDK
+        run: |
+          VERSION="${{ env.VERSION }}"
+          TARGET="${{ env.TARGET }}"
+          SUBTARGET="${{ env.SUBTARGET }}"
+          GCC="${{ env.GCC }}"
 
-        echo "=========================================="
-        echo "📋 编译参数:"
-        echo "   OpenWrt: ${VERSION}"
-        echo "   目标:    ${TARGET}/${SUBTARGET}"
-        echo "   GCC:     ${GCC}"
-        echo "=========================================="
+          BASE="https://downloads.openwrt.org/releases/${VERSION}/targets/${TARGET}/${SUBTARGET}"
 
-    # ── 2. 安装依赖 ──────────────────────────────────────────────
-    - name: 安装系统依赖
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -yqq \
-          build-essential libncurses-dev zlib1g-dev gawk git gettext \
-          libssl-dev xsltproc rsync wget unzip python3 python3-pyelftools \
-          python3-dev python3-setuptools zstd file
-        echo "✅ 依赖就绪"
-
-    # ── 3. 缓存 SDK ──────────────────────────────────────────────
-    - name: 缓存 SDK 压缩包
-      id: cache-sdk
-      uses: actions/cache@v4
-      with:
-        path: sdk.tar.zst
-        key: sdk-${{ env.VERSION }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-gcc${{ env.GCC }}-v2
-
-    # ── 4. 下载 SDK ──────────────────────────────────────────────
-    - name: 下载 OpenWrt SDK
-      if: steps.cache-sdk.outputs.cache-hit != 'true'
-      run: |
-        SDK_BASE="${{ env.SDK_BASE }}"
-        GCC="${{ env.GCC }}"
-        VERSION="${{ env.VERSION }}"
-        TARGET="${{ env.TARGET }}"
-        SUBTARGET="${{ env.SUBTARGET }}"
-
-        SDK_URL=""
-        for suffix in "gcc-${GCC}_musl" "musl"; do
-          FILE="openwrt-sdk-${VERSION}-${TARGET}-${SUBTARGET}_${suffix}.Linux-x86_64.tar.zst"
-          URL="${SDK_BASE}/${FILE}"
-          echo "🔍 尝试: $URL"
-          if wget --spider -q "$URL" 2>/dev/null; then
-            SDK_URL="$URL"
-            break
-          fi
-        done
-
-        if [ -z "$SDK_URL" ]; then
-          echo "❌ 找不到 SDK，请检查: ${SDK_BASE}/"
+          for suffix in "gcc-${GCC}_musl" "musl"; do
+            URL="${BASE}/openwrt-sdk-${VERSION}-${TARGET}-${SUBTARGET}_${suffix}.Linux-x86_64.tar.zst"
+            if wget --spider -q "$URL" 2>/dev/null; then
+              echo "📦 下载: $URL"
+              wget -q "$URL" -O sdk.tar.zst
+              echo "✅ $(du -h sdk.tar.zst | cut -f1)"
+              exit 0
+            fi
+          done
+          echo "❌ SDK not found"
           exit 1
-        fi
 
-        echo "📦 下载: $SDK_URL"
-        wget -q --show-progress "$SDK_URL" -O sdk.tar.zst
-        echo "✅ 下载完成: $(du -h sdk.tar.zst | cut -f1)"
+      - name: 解压 SDK
+        run: |
+          rm -rf sdk
+          mkdir -p sdk
+          tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
 
-    # ── 5. 解压 SDK ──────────────────────────────────────────────
-    - name: 解压 SDK
-      run: |
-        rm -rf sdk
-        mkdir -p sdk
-        tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
-        echo "✅ SDK 解压完成"
-        echo "SDK 内容:"
-        ls sdk/
+      - name: 克隆插件仓库
+        run: |
+          git clone --depth 1 --branch ${{ inputs.repo_branch }} \
+            ${{ inputs.repo_url }} /tmp/plugin-repo
+          find /tmp/plugin-repo -maxdepth 3 -type d | sort
 
-    # ── 6. 克隆插件仓库 ──────────────────────────────────────────
-    - name: 克隆插件源码
-      run: |
-        echo "📥 克隆: ${{ inputs.repo_url }}"
-        git clone --depth 1 --branch ${{ inputs.repo_branch }} \
-          ${{ inputs.repo_url }} /tmp/plugin-repo
+      - name: 更新 feeds
+        working-directory: sdk
+        run: |
+          ./scripts/feeds update -a >/dev/null 2>&1
+          ./scripts/feeds install -a >/dev/null 2>&1
+          echo "✅ feeds 就绪"
 
-        echo "仓库结构:"
-        find /tmp/plugin-repo -maxdepth 3 -type d | sort
+      - name: 放入插件源码
+        working-directory: sdk
+        run: |
+          PKG_DIR="${{ inputs.package_dir }}"
+          PLUGIN_DIRS=()
 
-    # ── 7. 更新 feeds ────────────────────────────────────────────
-    - name: 更新 feeds
-      working-directory: sdk
-      run: |
-        ./scripts/feeds update -a >/dev/null 2>&1
-        ./scripts/feeds install -a >/dev/null 2>&1
-        echo "✅ feeds 就绪"
-
-    # 关键修改点已用 ★ 标注
-    # ── 8. 放入插件源码 ────────────────────────────────────────
-    - name: 放入插件源码
-      working-directory: sdk
-      run: |
-        PKG_DIR="${{ inputs.package_dir }}"
-        PLUGIN_DIRS=()
-
-        if [ -n "$PKG_DIR" ] && [ -d "/tmp/plugin-repo/${PKG_DIR}" ]; then
-          SEARCH_ROOT="/tmp/plugin-repo/${PKG_DIR}"
-        else
-          SEARCH_ROOT="/tmp/plugin-repo"
-        fi
+          if [ -n "$PKG_DIR" ] && [ -d "/tmp/plugin-repo/${PKG_DIR}" ]; then
+            SEARCH="/tmp/plugin-repo/${PKG_DIR}"
+          else
+            SEARCH="/tmp/plugin-repo"
+          fi
 
           while IFS= read -r mf; do
             DIR=$(dirname "$mf")
@@ -177,131 +117,104 @@ jobs:
             PLUGIN_DIRS+=("${PKG}:${DIR}")
           done < <(find "$SEARCH" -maxdepth 3 -name 'Makefile')
 
-        if [ ${#PLUGIN_DIRS[@]} -eq 0 ]; then
-          echo "❌ 未找到插件"
-          find "$SEARCH_ROOT" -maxdepth 3 -name 'Makefile'
-          exit 1
-        fi
-
-        # ★ 修复: 保存纯包名列表(每行一个),供后续步骤读取
-        printf '%s\n' "${PLUGIN_DIRS[@]%%:*}" > /tmp/plugin_names.txt
-        printf '%s\n' "${PLUGIN_DIRS[@]}"     > /tmp/plugin_list.txt
-
-        for entry in "${PLUGIN_DIRS[@]}"; do
-          PKG="${entry%%:*}"
-          SRC_DIR="${entry#*:}"
-
-          rm -rf "package/feeds/luci/${PKG}" 2>/dev/null || true
-          rm -rf "feeds/luci/applications/${PKG}" 2>/dev/null || true
-          rm -rf "package/${PKG}" 2>/dev/null || true
-
-          cp -rT "$SRC_DIR" "package/${PKG}"
-
-          MAKEFILE="package/${PKG}/Makefile"
-          if [ -f "$MAKEFILE" ] && grep -q 'LUCI_DEPENDS' "$MAKEFILE"; then
-            sed -i '/^LUCI_DEPENDS:/d' "$MAKEFILE"
+          if [ ${#PLUGIN_DIRS[@]} -eq 0 ]; then
+            echo "❌ 未找到插件"
+            find "$SEARCH" -maxdepth 3 -name 'Makefile'
+            exit 1
           fi
 
-          if [ -d "package/${PKG}/www" ]; then
-            if [ -d "package/${PKG}/htdocs" ]; then
-              cp -rT "package/${PKG}/www" "package/${PKG}/htdocs"
-              rm -rf "package/${PKG}/www"
-            else
-              mv "package/${PKG}/www" "package/${PKG}/htdocs"
+          printf '%s\n' "${PLUGIN_DIRS[@]%%:*}" > /tmp/plugin_names.txt
+          printf '%s\n' "${PLUGIN_DIRS[@]}"     > /tmp/plugin_list.txt
+
+          for entry in "${PLUGIN_DIRS[@]}"; do
+            PKG="${entry%%:*}"
+            SRC="${entry#*:}"
+
+            rm -rf "package/feeds/luci/${PKG}" "feeds/luci/applications/${PKG}" "package/${PKG}" 2>/dev/null || true
+
+            cp -rT "$SRC" "package/${PKG}"
+
+            if [ -f "package/${PKG}/Makefile" ] && grep -q 'LUCI_DEPENDS' "package/${PKG}/Makefile"; then
+              sed -i '/^LUCI_DEPENDS:/d' "package/${PKG}/Makefile"
             fi
-          fi
 
-          echo "  ✅ $PKG"
-        done
+            if [ -d "package/${PKG}/www" ]; then
+              if [ -d "package/${PKG}/htdocs" ]; then
+                cp -rT "package/${PKG}/www" "package/${PKG}/htdocs"
+                rm -rf "package/${PKG}/www"
+              else
+                mv "package/${PKG}/www" "package/${PKG}/htdocs"
+              fi
+            fi
 
-    # ── 9. 配置 ────────────────────────────────────────────────
-    - name: 配置编译选项
-      working-directory: sdk
-      run: |
-        # ★ 修复: 从文件读取所有包名,一次性写入 .config
-        while read -r PKG; do
-          [ -z "$PKG" ] && continue
-          echo "CONFIG_PACKAGE_${PKG}=y" >> .config
-        done < /tmp/plugin_names.txt
+            echo "  ✅ $PKG"
+          done
 
-        make defconfig || true
+      - name: 配置编译选项
+        working-directory: sdk
+        run: |
+          while read -r PKG; do
+            [ -z "$PKG" ] && continue
+            echo "CONFIG_PACKAGE_${PKG}=y" >> .config
+          done < /tmp/plugin_names.txt
 
-        echo "✅ 配置完成"
-        while read -r PKG; do
-          [ -z "$PKG" ] && continue
-          grep -q "CONFIG_PACKAGE_${PKG}=y" .config && echo "  ✅ $PKG" || echo "  ⚠️ $PKG 未选中"
-        done < /tmp/plugin_names.txt
+          make defconfig || true
 
-    # ── 10. 编译 ───────────────────────────────────────────────
-    - name: 编译插件
-      working-directory: sdk
-      run: |
-        set -o pipefail
-        FAILED=()
+          echo "✅ 配置完成"
+          while read -r PKG; do
+            [ -z "$PKG" ] && continue
+            grep -q "CONFIG_PACKAGE_${PKG}=y" .config && echo "  ✅ $PKG" || echo "  ⚠️ $PKG"
+          done < /tmp/plugin_names.txt
 
-        while read -r PKG; do
-          [ -z "$PKG" ] && continue
+      - name: 编译插件
+        working-directory: sdk
+        run: |
+          FAILED=()
+
+          while read -r PKG; do
+            [ -z "$PKG" ] && continue
+
+            echo ""
+            echo "══════ 编译: $PKG ══════"
+
+            make "package/${PKG}/clean" V=s -j$(nproc) 2>&1 | tail -5 || true
+
+            if make "package/${PKG}/compile" V=s -j$(nproc) 2>&1 | tail -100; then
+              echo "  ✅ $PKG"
+            else
+              echo "  ❌ $PKG"
+              FAILED+=("$PKG")
+            fi
+          done < /tmp/plugin_names.txt
+
           echo ""
-          echo "════════════════════════════════════════"
-          echo "  🔨 编译: $PKG"
-          echo "════════════════════════════════════════"
-
-          make package/${PKG}/clean V=s -j$(nproc) 2>&1 | tail -5 || true
-          echo "--- 编译 $PKG ---"
-
-          if make package/${PKG}/compile V=s -j$(nproc) 2>&1 | tail -100; then
-            echo "  ✅ $PKG 编译成功"
+          if [ ${#FAILED[@]} -gt 0 ]; then
+            echo "FAIL: ${FAIL[@]}"
           else
-            echo "  ❌ $PKG 编译失败"
-            FAILED+=("$PKG")
+            echo "ALL OK"
           fi
-        done < /tmp/plugin_names.txt
 
-        echo ""
-        echo "=========================================="
-        if [ ${#FAILED[@]} -gt 0 ]; then
-          echo "❌ 失败的包:"
-          printf '  - %s\n' "${FAILED[@]}"
-        else
-          echo "✅ 全部编译成功"
-        fi
-        echo "=========================================="
+      - name: 收集产物
+        run: |
+          mkdir -p artifacts
 
-    # ── 11. 收集产物 ───────────────────────────────────────────
-    - name: 收集编译产物
-      run: |
-        mkdir -p artifacts
-
-        while read -r PKG; do
-          [ -z "$PKG" ] && continue
-          for ext in apk ipk; do
-            find sdk/bin -type f -name "*${PKG}*.${ext}" 2>/dev/null | while read f; do
-              echo "  📦 $(basename $f)"
-              cp "$f" artifacts/
+          while read -r PKG; do
+            [ -z "$PKG" ] && continue
+            for ext in apk ipk; do
+              find sdk/bin -type f -name "*${PKG}*.${ext}" 2>/dev/null | while read f; do
+                cp "$f" artifacts/
+                echo "  $(basename $f)"
+              done
             done
-          done
-          SHORT=${PKG#luci-app-}
-          for ext in apk ipk; do
-            find sdk/bin -type f -name "*luci-i18n-${SHORT}*.${ext}" 2>/dev/null | while read f; do
-              echo "  📦 $(basename $f)"
-              cp "$f" artifacts/
-            done
-          done
-        done < /tmp/plugin_names.txt
+          done < /tmp/plugin_names.txt
 
-        echo ""
-        echo "📦 编译产物:"
-        ls -lh artifacts/ 2>/dev/null || echo "(空)"
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-packages
+          path: artifacts/*
+          retention-days: 90
 
-    # ── 12. 上传 ─────────────────────────────────────────────────
-    - name: 上传编译产物
-      uses: actions/upload-artifact@v4
-      with:
-        name: openwrt-packages
-        path: artifacts/*
-        if-no-files-found: warn
-        retention-days: 90
-
-    - name: 清理
-      if: always()
-      run: rm -rf sdk /tmp/plugin-repo /tmp/plugin_list.txt artifacts
+      - name: 清理
+        if: always()
+        run: rm -rf sdk /tmp/plugin-repo /tmp/plugin_names.txt /tmp/plugin_list.txt artifacts
