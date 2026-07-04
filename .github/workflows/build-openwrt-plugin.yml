@@ -224,15 +224,7 @@ jobs:
           echo "  ❌ overview.js 未找到，列出 view/ 目录:"
           find "package/${PACKAGE_NAME}" -path "*/view/*" -type f
         fi
-
-        # 自动同步 Makefile 的版本号到 overview.js
-        MAKE_VER=$(grep -Po 'PKG_VERSION:=\K.*' "package/${PACKAGE_NAME}/Makefile" || echo "1.0.0")
-        
-        # 使用更严格的正则 [^\"]* 防止破坏同行其他 JS 代码
-        sed -i "s/const PKG_VERSION=\"[^\"]*\"/const PKG_VERSION=\"${MAKE_VER}\"/" "package/${PACKAGE_NAME}/htdocs/luci-static/resources/view/dae/overview.js"
-        
-        echo "✅ 已自动将前端 overview.js 版本号同步为: ${MAKE_VER}"
-        
+ 
 # ============================================
 # 第10步：配置 .config（修复循环依赖）
 # ============================================
