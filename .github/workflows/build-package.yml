@@ -163,15 +163,21 @@ jobs:
           SEARCH_ROOT="/tmp/plugin-repo"
         fi
 
-        while IFS= read -r makefile; do
-          if grep -q 'PKG_NAME' "$makefile" 2>/dev/null; then
-            PKG=$(grep -m1 'PKG_NAME' "$makefile" | sed 's/.*:=\s*//')
-            DIR=$(dirname "$makefile")
-            case "$DIR" in */feeds/*) continue ;; esac
-            PLUGIN_DIRS+=("${PKG}:${DIR}")
-            echo "📦 发现插件: $PKG ($DIR)"
-          fi
-        done < <(find "$SEARCH_ROOT" -maxdepth 3 -name 'Makefile')
+	while IFS= read -r makefile; do
+	  DIR=$(dirname "$makefile")
+	  case "$DIR" in */feeds/*) continue ;; esac
+
+	  # 优先从 Makefile 提取 PKG_NAME，没有则用目录名
+	  PKG=$(grep -m1 'PKG_NAME' "$makefile" 2>/dev/null | sed 's/.*:=\s*//')
+	  if [ -z "$PKG" ]; then
+	    PKG=$(basename "$DIR")
+	    echo "📦 发现插件: $PKG (目录名兜底, $DIR)"
+	  else
+	    echo "📦 发现插件: $PKG ($DIR)"
+	  fi
+
+	  PLUGIN_DIRS+=("${PKG}:${DIR}")
+	done < <(find "$SEARCH_ROOT" -maxdepth 3 -name 'Makefile')
 
         if [ ${#PLUGIN_DIRS[@]} -eq 0 ]; then
           echo "❌ 未找到插件"
