@@ -25,6 +25,14 @@ on:
         description: '目标架构（格式: target subtarget）'
         required: false
         default: 'rockchip armv8'
+      exclude_pkg:
+        description: '排除的包名（多个用逗号分隔，如 duck,kmod-ebpf）'
+        required: false
+        default: 'duck'
+      timeout_per_pkg:
+        description: '单插件编译超时（分钟，填 0 或留空=不限制）'
+        required: false
+        default: '0'
 
 jobs:
   build:
@@ -42,10 +50,16 @@ jobs:
         SUBTARGET=$(echo "$ARCH" | awk '{print $2}')
         PKG_DIR="${{ inputs.package_dir }}"
 
+        EXCLUDE="${{ inputs.exclude_pkg }}"
+        TIMEOUT="${{ inputs.timeout_per_pkg }}"
+        TIMEOUT="${TIMEOUT:-0}"
+
         echo "VERSION=$VERSION"         >> $GITHUB_ENV
         echo "TARGET=$TARGET"           >> $GITHUB_ENV
         echo "SUBTARGET=$SUBTARGET"     >> $GITHUB_ENV
         echo "PACKAGE_DIR=$PKG_DIR"     >> $GITHUB_ENV
+        echo "EXCLUDE_PKG=$EXCLUDE"     >> $GITHUB_ENV
+        echo "TIMEOUT_MIN=$TIMEOUT"     >> $GITHUB_ENV
 
         echo "=========================================="
         echo "📋 编译参数:"
@@ -54,6 +68,8 @@ jobs:
         echo "   扫描目录: ${PKG_DIR:-<根目录>}"
         echo "   版本:     $VERSION"
         echo "   架构:     $TARGET / $SUBTARGET"
+        echo "   排除:     ${EXCLUDE:-无}"
+        echo "   超时:     ${TIMEOUT} 分钟/插件"
         echo "=========================================="
 
     # ── 安装依赖 ──────────────────────────────────────────
@@ -129,10 +145,33 @@ jobs:
           SEARCH="/tmp/plugin-repo"
         fi
 
+        EXCLUDE="${{ env.EXCLUDE_PKG }}"
+
         echo "🔍 扫描目录: $SEARCH"
+        [ -n "$EXCLUDE" ] && echo "🚫 排除: $EXCLUDE"
+
+        # 构建排除列表
+        EXCLUDE_LIST=()
+        if [ -n "$EXCLUDE" ]; then
+          IFS=',' read -ra EXCLUDE_LIST <<< "$EXCLUDE"
+        fi
+
+        is_excluded() {
+          local pkg="$1"
+          local dir_name
+          dir_name=$(basename "$(dirname "$2")")
+          for ex in "${EXCLUDE_LIST[@]}"; do
+            # 匹配包名或目录名
+            if [ "$pkg" = "$ex" ] || [ "$dir_name" = "$ex" ]; then
+              return 0
+            fi
+          done
+          return 1
+        }
 
         # 查找所有包含 Makefile 的目录（最多 3 层，排除 feeds）
         PLUGIN_LIST=()
+        EXCLUDED_COUNT=0
         while IFS= read -r mf; do
           DIR=$(dirname "$mf")
           # 排除 feeds 目录
@@ -142,10 +181,19 @@ jobs:
           PKG=$(grep -m1 'PKG_NAME' "$mf" 2>/dev/null | sed 's/.*:=\s*//')
           if [ -z "$PKG" ]; then
             PKG=$(basename "$DIR")
-            echo "📦 $PKG（目录名兜底）— $DIR"
+            LABEL="📦 $PKG（目录名兜底）"
           else
-            echo "📦 $PKG — $DIR"
+            LABEL="📦 $PKG"
           fi
+
+          # 检查是否排除
+          if is_excluded "$PKG" "$DIR"; then
+            echo "  ⏭️  $PKG — 已排除"
+            EXCLUDED_COUNT=$((EXCLUDED_COUNT + 1))
+            continue
+          fi
+
+          echo "  $LABEL — $DIR"
           PLUGIN_LIST+=("${PKG}:${DIR}")
         done < <(find "$SEARCH" -maxdepth 3 -name 'Makefile' -not -path '*/feeds/*')
 
@@ -157,6 +205,7 @@ jobs:
 
         echo ""
         echo "✅ 发现 ${#PLUGIN_LIST[@]} 个插件"
+        [ "$EXCLUDED_COUNT" -gt 0 ] && echo "⏭️ 排除了 $EXCLUDED_COUNT 个插件"
 
         # 写入临时文件供后续 step 使用
         printf '%s\n' "${PLUGIN_LIST[@]}" > /tmp/plugin_list.txt
@@ -238,24 +287,58 @@ jobs:
       run: |
         SUCCESS=()
         FAILED=()
-        SKIPPED=()
+        TIMEOUT_LIST=()
+        TIMEOUT_MIN="${{ env.TIMEOUT_MIN }}"
+        if [ "$TIMEOUT_MIN" -gt 0 ] 2>/dev/null; then
+          TIMEOUT_SEC=$((TIMEOUT_MIN * 60))
+          echo "⏱️ 单插件超时: ${TIMEOUT_MIN} 分钟"
+        else
+          TIMEOUT_SEC=0
+          echo "⏱️ 单插件超时: 不限制"
+        fi
+        echo ""
 
         while read -r PKG; do
           [ -z "$PKG" ] && continue
 
-          echo ""
-          echo "══════════════════════════════════"
-          echo "🔨 编译: $PKG"
-          echo "══════════════════════════════════"
+          if [ "$TIMEOUT_SEC" -gt 0 ]; then
+            echo ""
+            echo "══════════════════════════════════"
+            echo "🔨 编译: $PKG（超时 ${TIMEOUT_MIN}m）"
+            echo "══════════════════════════════════"
+          else
+            echo ""
+            echo "══════════════════════════════════"
+            echo "🔨 编译: $PKG"
+            echo "══════════════════════════════════"
+          fi
 
           make "package/${PKG}/clean" V=s -j$(nproc) 2>&1 | tail -3 || true
 
-          if make "package/${PKG}/compile" V=s -j$(nproc) 2>&1 | tail -80; then
-            echo "  ✅ $PKG 编译成功"
+          START_TIME=$(date +%s)
+
+          # 编译命令（timeout 0 或空 = 不限制）
+          if [ "$TIMEOUT_SEC" -gt 0 ]; then
+            COMPILE_CMD="timeout ${TIMEOUT_SEC} make package/${PKG}/compile V=s -j$(nproc)"
+          else
+            COMPILE_CMD="make package/${PKG}/compile V=s -j$(nproc)"
+          fi
+
+          if eval "$COMPILE_CMD" 2>&1 | tail -80; then
+            ELAPSED=$(( $(date +%s) - START_TIME ))
+            echo "  ✅ $PKG 编译成功 (${ELAPSED}s)"
             SUCCESS+=("$PKG")
           else
-            echo "  ❌ $PKG 编译失败，跳过"
-            FAILED+=("$PKG")
+            EXIT_CODE=$?
+            ELAPSED=$(( $(date +%s) - START_TIME ))
+            if [ "$TIMEOUT_SEC" -gt 0 ] && [ "$EXIT_CODE" -eq 124 ]; then
+              echo "  ⏰ $PKG 编译超时 (${ELAPSED}s >= ${TIMEOUT_MIN}m)，跳过"
+              TIMEOUT_LIST+=("$PKG")
+              pkill -f "make.*${PKG}" 2>/dev/null || true
+            else
+              echo "  ❌ $PKG 编译失败 (${ELAPSED}s)，跳过"
+              FAILED+=("$PKG")
+            fi
           fi
         done < /tmp/plugin_names.txt
 
@@ -264,16 +347,18 @@ jobs:
         echo "📊 编译结果:"
         echo "  ✅ 成功: ${#SUCCESS[@]} — ${SUCCESS[*]:-无}"
         echo "  ❌ 失败: ${#FAILED[@]} — ${FAILED[*]:-无}"
+        echo "  ⏰ 超时: ${#TIMEOUT_LIST[@]} — ${TIMEOUT_LIST[*]:-无}"
         echo "=========================================="
 
         # 写入 summary
         echo "success_count=${#SUCCESS[@]}" >> $GITHUB_OUTPUT
         echo "failed_count=${#FAILED[@]}" >> $GITHUB_OUTPUT
-        echo "failed_list=${FAILED[*]}" >> $GITHUB_OUTPUT
+        echo "timeout_count=${#TIMEOUT_LIST[@]}" >> $GITHUB_OUTPUT
+        echo "failed_list=${FAILED[*]} ${TIMEOUT_LIST[*]}" >> $GITHUB_OUTPUT
 
         # 所有都失败才算整体失败
-        if [ ${#SUCCESS[@]} -eq 0 ] && [ ${#FAILED[@]} -gt 0 ]; then
-          echo "❌ 所有插件编译失败"
+        if [ ${#SUCCESS[@]} -eq 0 ] && [ $(( ${#FAILED[@]} + ${#TIMEOUT_LIST[@]} )) -gt 0 ]; then
+          echo "❌ 所有插件编译失败或超时"
           exit 1
         fi
 
@@ -321,8 +406,11 @@ jobs:
         echo "| 版本 | ${{ env.VERSION }} |" >> $GITHUB_STEP_SUMMARY
         echo "| 架构 | ${{ env.TARGET }}/${{ env.SUBTARGET }} |" >> $GITHUB_STEP_SUMMARY
         echo "| 插件数 | ${{ env.PLUGIN_COUNT }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 排除 | ${{ env.EXCLUDE_PKG || '无' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 超时 | ${{ env.TIMEOUT_MIN }} 分钟/插件 |" >> $GITHUB_STEP_SUMMARY
         echo "| 成功 | ${{ steps.compile.outputs.success_count }} |" >> $GITHUB_STEP_SUMMARY
         echo "| 失败 | ${{ steps.compile.outputs.failed_count }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 超时 | ${{ steps.compile.outputs.timeout_count }} |" >> $GITHUB_STEP_SUMMARY
         if [ -n "${{ steps.compile.outputs.failed_list }}" ]; then
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### ❌ 失败插件" >> $GITHUB_STEP_SUMMARY
