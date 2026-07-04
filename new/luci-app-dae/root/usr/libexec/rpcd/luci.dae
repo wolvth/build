@@ -25,8 +25,8 @@ ensure_directories() {
     [ ! -d "$CONF_DIR" ] && mkdir -p "$CONF_DIR"
     # 创建日志文件（防止重定向失败）
     [ ! -f "$LOG" ] && touch "$LOG" && chmod 644 "$LOG"
-		# 创建默认配置文件 600权限
-		[ ! -f "$CONF" ] && touch "$CONF" && chmod 600 "$CONF"
+	# 创建默认配置文件 600权限
+	[ ! -f "$CONF" ] && touch "$CONF" && chmod 600 "$CONF"
 }
 
 # ── 【新增】确保 UCI 配置存在（替代删除的 90_dae） ─────────────
@@ -90,7 +90,7 @@ get_process_stats() {
         start_time="$(echo "$stat_fields" | awk '{print $22}')"
         system_uptime="$(cat /proc/uptime 2>/dev/null | awk '{printf "%d", $1}')"
 
-				# 瞬时 CPU：本次采样 - 上次采样
+		# 瞬时 CPU：本次采样 - 上次采样
         local prev_utime prev_stime prev_uptime
         if [ -f "$prev_file" ]; then
             prev_utime="$(awk '{print $1}' "$prev_file")"
@@ -108,7 +108,7 @@ get_process_stats() {
         delta_time=$(( (system_uptime - prev_uptime) * clk_tck ))
         num_cpu=$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)
         if [ "$delta_time" -gt 0 ] && [ "$prev_uptime" -gt 0 ]; then
-						# 总 CPU% = 单核% / 核心数，与 top/btop 一致
+			# 总 CPU% = 单核% / 核心数，与 top/btop 一致
             cpu_pct=$(( delta_cpu * 100 / delta_time / num_cpu ))
             [ "$cpu_pct" -gt 100 ] && cpu_pct=100
             [ "$cpu_pct" -lt 0 ] && cpu_pct=0
@@ -139,7 +139,7 @@ get_process_stats() {
         cpu_pct=0; threads=0; uptime_str="-"
     fi
 
-		# 内存
+	# 内存
     rss_kb=0; vm_kb=0
     if [ -f "/proc/$pid/status" ]; then
         rss_kb="$(awk '/^VmRSS:/{print $2}' /proc/$pid/status 2>/dev/null || echo 0)"
