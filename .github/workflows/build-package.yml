@@ -14,7 +14,7 @@ on:
       package_dir:
         description: '插件在仓库中的子目录 (留空=仓库根目录)'
         required: false
-        default: 'new'
+        default: 'new/luci-app-dae'
       openwrt_version:
         description: 'OpenWrt 版本'
         required: true
