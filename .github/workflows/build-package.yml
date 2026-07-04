@@ -9,7 +9,7 @@ on:
       repo_url:
         description: '插件仓库地址 (HTTPS)'
         required: true
-        default: 'https://github.com/wolvth/luci-app-dae.git'
+        default: 'https://github.com/wolvth/build.git'
       repo_branch:
         description: '仓库分支'
         required: false
@@ -17,7 +17,7 @@ on:
       package_dir:
         description: '插件在仓库中的子目录 (留空=仓库根目录)'
         required: false
-        default: ''
+        default: 'new/luci-app-dae'
       openwrt_version:
         description: 'OpenWrt 版本'
         required: true
