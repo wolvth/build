@@ -7,6 +7,7 @@ readonly LOG="/var/log/dae/dae.log"
 readonly LOG_DIR="/var/log/dae"
 readonly CONF_DIR="/etc/dae"
 readonly INSTALLER="/usr/share/dae/installer.sh"
+readonly ACTIONS_SCRIPT="/root/sh/updae_from_actions.sh"
 readonly GEO_LOCK="/var/run/dae-geo-update.lock"
 readonly DAE_LOCK="/var/run/dae-update.lock"
 readonly GEOIP="/usr/share/dae/geoip.dat"
@@ -249,7 +250,6 @@ set_init_action() {
               current_ver=$("$PROG" --version 2>/dev/null | awk 'NR==1{print $3}')
               case "$current_ver" in
                   unstable-*|dev-*|nightly-*|snapshot-*|ci-*)
-                      ACTIONS_SCRIPT="/root/sh/updae_from_actions.sh"
                       if [ -f "$ACTIONS_SCRIPT" ] && [ -x "$ACTIONS_SCRIPT" ]; then
                           sh "$ACTIONS_SCRIPT" >> "$LOG" 2>&1
                       else
