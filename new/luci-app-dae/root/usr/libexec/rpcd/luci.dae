@@ -42,6 +42,11 @@ ensure_uci_config() {
     fi
 }
 
+# ── 【新增】检查 dae 二进制是否存在 ────────────────────────────
+check_dae_binary() {
+    [ -f "$PROG" ] && [ -x "$PROG" ]
+}
+
 # ── 原版开始（保持不变） ──────────────────────────────────────
 is_enabled() { "/etc/init.d/${1}" enabled; }
 is_running() {
@@ -218,17 +223,9 @@ set_init_action() {
                 if ! check_dae_binary; then
                     # 二进制不存在，尝试从 installer 恢复
                     if [ -x "$INSTALLER" ]; then
-                        sh "$INSTALLER" install-prerelease >> "$LOG" 2>&1 || {
-                            print_json_bool "result" '0'
-                            return
-                        }
-                    else
-                        print_json_bool "result" '0'
-                        return
+                        sh "$INSTALLER" install-prerelease >> "$LOG" 2>&1
                     fi
                 fi
-                # 确保配置文件不为空
-                [ ! -s "$CONF" ] && write_default_config
             fi
             
             if /etc/init.d/"$name" "$action" >/dev/null 2>&1; then
@@ -293,10 +290,12 @@ set_init_action() {
     esac
 }
 
-# ── 原版：validate_config ──────────────────
+# ── 【修改】：validate_config ──────────────────
 validate_config() {
     local content="$1" out rc tmp
-    if [ ! -f "$PROG" ]; then
+
+    # 【新增】二进制不存在时返回明确错误
+    if ! check_dae_binary; then
         json_init
         json_add_boolean 'valid' '0'
         json_add_string 'message' 'dae binary not found at /usr/bin/dae'
