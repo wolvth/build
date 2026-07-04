@@ -35,6 +35,8 @@ jobs:
     steps:
       - name: 解析参数
         run: |
+          REPO_URL="${{ github.event.inputs.repo_url || env.DEFAULT_REPO_URL }}"
+          PLUGIN_SUBDIR="${{ github.event.inputs.package_dir || env.DEFAULT_PLUGIN_SUBDIR }}"        
           TARGET=$(echo "${{ inputs.target_arch }}" | awk '{print $1}')
           SUBTARGET=$(echo "${{ inputs.target_arch }}" | awk '{print $2}')
           GCC="${{ inputs.gcc_version }}"
