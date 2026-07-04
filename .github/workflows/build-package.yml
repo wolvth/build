@@ -149,25 +149,20 @@ jobs:
         ./scripts/feeds install -a >/dev/null 2>&1
         echo "✅ feeds 就绪"
 
-    # ── 8. 放入插件源码（关键步骤）────────────────────────────────
+   # 关键修改点已用 ★ 标注
+    # ── 8. 放入插件源码 ────────────────────────────────────────
     - name: 放入插件源码
       working-directory: sdk
       run: |
         PKG_DIR="${{ inputs.package_dir }}"
-        REPO_URL="${{ inputs.repo_url }}"
-
-        # 从仓库地址猜测包名（用于清理同名包）
-        # 也可以直接用目录名
         PLUGIN_DIRS=()
 
-        # 自动发现插件目录
         if [ -n "$PKG_DIR" ] && [ -d "/tmp/plugin-repo/${PKG_DIR}" ]; then
           SEARCH_ROOT="/tmp/plugin-repo/${PKG_DIR}"
         else
           SEARCH_ROOT="/tmp/plugin-repo"
         fi
 
-        # 收集所有插件
         while IFS= read -r makefile; do
           if grep -q 'PKG_NAME' "$makefile" 2>/dev/null; then
             PKG=$(grep -m1 'PKG_NAME' "$makefile" | sed 's/.*:=\s*//')
@@ -184,32 +179,25 @@ jobs:
           exit 1
         fi
 
-        # 处理每个插件
+        # ★ 修复: 保存纯包名列表(每行一个),供后续步骤读取
+        printf '%s\n' "${PLUGIN_DIRS[@]%%:*}" > /tmp/plugin_names.txt
+        printf '%s\n' "${PLUGIN_DIRS[@]}"     > /tmp/plugin_list.txt
+
         for entry in "${PLUGIN_DIRS[@]}"; do
           PKG="${entry%%:*}"
           SRC_DIR="${entry#*:}"
-          echo ""
-          echo "════════════════════════════════════════"
-          echo "  处理: $PKG"
-          echo "════════════════════════════════════════"
 
-          # ---- 清理 feed 中同名包 ----
           rm -rf "package/feeds/luci/${PKG}" 2>/dev/null || true
           rm -rf "feeds/luci/applications/${PKG}" 2>/dev/null || true
           rm -rf "package/${PKG}" 2>/dev/null || true
 
-          # ---- 拷贝源码到 package/ ----
           cp -rT "$SRC_DIR" "package/${PKG}"
-          echo "  ✅ 源码 → package/${PKG}"
 
-          # ---- 删除 LUCI_DEPENDS ----
           MAKEFILE="package/${PKG}/Makefile"
           if [ -f "$MAKEFILE" ] && grep -q 'LUCI_DEPENDS' "$MAKEFILE"; then
             sed -i '/^LUCI_DEPENDS:/d' "$MAKEFILE"
-            echo "  ✅ 已删除 LUCI_DEPENDS"
           fi
 
-          # ---- www/ → htdocs/ ----
           if [ -d "package/${PKG}/www" ]; then
             if [ -d "package/${PKG}/htdocs" ]; then
               cp -rT "package/${PKG}/www" "package/${PKG}/htdocs"
@@ -217,74 +205,70 @@ jobs:
             else
               mv "package/${PKG}/www" "package/${PKG}/htdocs"
             fi
-            echo "  ✅ www/ → htdocs/"
           fi
 
-          # ---- 确认文件 ----
-          echo "  📂 目录结构:"
-          find "package/${PKG}" -type f | sort | sed 's/^/    /'
-
-          # ---- 确认 Makefile 内容 ----
-          echo "  📄 Makefile:"
-          cat "package/${PKG}/Makefile"
+          echo "  ✅ $PKG"
         done
-        
-        # ============================================
-        # 自动同步 Makefile 的版本号到 overview.js
-        # ============================================
-        MAKE_VER=$(grep -Po 'PKG_VERSION:=\K.*' "package/${PKG}/Makefile" || echo "1.0.0")
-        
-        # 使用更严格的正则 [^\"]* 防止破坏同行其他 JS 代码
-        sed -i "s/const PKG_VERSION=\"[^\"]*\"/const PKG_VERSION=\"${MAKE_VER}\"/" "package/${PKG}/htdocs/luci-static/resources/view/dae/overview.js"
-        
-        echo "✅ 已自动将前端 overview.js 版本号同步为: ${MAKE_VER}"
 
-        # 保存插件列表
-        printf '%s\n' "${PLUGIN_DIRS[@]}" > /tmp/plugin_list.txt
-
-    # ── 9. 配置 ──────────────────────────────────────────────────
+    # ── 9. 配置 ────────────────────────────────────────────────
     - name: 配置编译选项
       working-directory: sdk
       run: |
-        cat > .config <<EOF
-        CONFIG_PACKAGE_${PKG}=y
-        EOF
+        # ★ 修复: 从文件读取所有包名,一次性写入 .config
+        while read -r PKG; do
+          [ -z "$PKG" ] && continue
+          echo "CONFIG_PACKAGE_${PKG}=y" >> .config
+        done < /tmp/plugin_names.txt
 
         make defconfig || true
 
         echo "✅ 配置完成"
-        grep -i "${PKG}" .config || echo "⚠️ 未找到 ${PKG}"
+        while read -r PKG; do
+          [ -z "$PKG" ] && continue
+          grep -q "CONFIG_PACKAGE_${PKG}=y" .config && echo "  ✅ $PKG" || echo "  ⚠️ $PKG 未选中"
+        done < /tmp/plugin_names.txt
 
-    # ── 10. 编译 ─────────────────────────────────────────────────
+    # ── 10. 编译 ───────────────────────────────────────────────
     - name: 编译插件
       working-directory: sdk
       run: |
         set -o pipefail
+        FAILED=()
 
-        echo "🔨 开始编译 ${PKG}..."
-        echo "   目标: rockchip/armv8"
-        echo "   并行: $(nproc) 线程"
+        while read -r PKG; do
+          [ -z "$PKG" ] && continue
+          echo ""
+          echo "════════════════════════════════════════"
+          echo "  🔨 编译: $PKG"
+          echo "════════════════════════════════════════"
+
+          make package/${PKG}/clean V=s -j$(nproc) 2>&1 | tail -5 || true
+          echo "--- 编译 $PKG ---"
+
+          if make package/${PKG}/compile V=s -j$(nproc) 2>&1 | tail -100; then
+            echo "  ✅ $PKG 编译成功"
+          else
+            echo "  ❌ $PKG 编译失败"
+            FAILED+=("$PKG")
+          fi
+        done < /tmp/plugin_names.txt
+
         echo ""
+        echo "=========================================="
+        if [ ${#FAILED[@]} -gt 0 ]; then
+          echo "❌ 失败的包:"
+          printf '  - %s\n' "${FAILED[@]}"
+        else
+          echo "✅ 全部编译成功"
+        fi
+        echo "=========================================="
 
-        # 先 clean 再 compile，分成两条命令
-        # 不能写成 {clean,compile} 并加引号，否则 bash 不会展开花括号
-        make package/${PKG}/clean V=s -j$(nproc) || true
-
-        echo ""
-        echo "=== 开始编译 ==="
-        echo ""
-
-        make package/${PKG}/compile V=s -j$(nproc) 2>&1 | tail -200
-
-        echo ""
-        echo "✅ 编译成功"
-
-    # ── 11. 收集产物 ─────────────────────────────────────────────
+    # ── 11. 收集产物 ───────────────────────────────────────────
     - name: 收集编译产物
       run: |
         mkdir -p artifacts
 
-        while IFS=: read -r PKG _; do
+        while read -r PKG; do
           [ -z "$PKG" ] && continue
           for ext in apk ipk; do
             find sdk/bin -type f -name "*${PKG}*.${ext}" 2>/dev/null | while read f; do
@@ -299,12 +283,10 @@ jobs:
               cp "$f" artifacts/
             done
           done
-        done < /tmp/plugin_list.txt
+        done < /tmp/plugin_names.txt
 
         echo ""
-        echo "=========================================="
         echo "📦 编译产物:"
-        echo "=========================================="
         ls -lh artifacts/ 2>/dev/null || echo "(空)"
 
     # ── 12. 上传 ─────────────────────────────────────────────────
