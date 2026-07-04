@@ -149,7 +149,7 @@ jobs:
         ./scripts/feeds install -a >/dev/null 2>&1
         echo "✅ feeds 就绪"
 
-   # 关键修改点已用 ★ 标注
+    # 关键修改点已用 ★ 标注
     # ── 8. 放入插件源码 ────────────────────────────────────────
     - name: 放入插件源码
       working-directory: sdk
@@ -163,21 +163,19 @@ jobs:
           SEARCH_ROOT="/tmp/plugin-repo"
         fi
 
-			while IFS= read -r makefile; do
-			  DIR=$(dirname "$makefile")
-			  case "$DIR" in */feeds/*) continue ;; esac
-		
-			  # 优先从 Makefile 提取 PKG_NAME，没有则用目录名
-			  PKG=$(grep -m1 'PKG_NAME' "$makefile" 2>/dev/null | sed 's/.*:=\s*//')
-			  if [ -z "$PKG" ]; then
-			    PKG=$(basename "$DIR")
-			    echo "📦 发现插件: $PKG (目录名兜底, $DIR)"
-			  else
-			    echo "📦 发现插件: $PKG ($DIR)"
-			  fi
-		
-			  PLUGIN_DIRS+=("${PKG}:${DIR}")
-			done < <(find "$SEARCH_ROOT" -maxdepth 3 -name 'Makefile')
+          while IFS= read -r mf; do
+            DIR=$(dirname "$mf")
+            case "$DIR" in */feeds/*) continue ;; esac
+
+            PKG=$(grep -m1 'PKG_NAME' "$mf" 2>/dev/null | sed 's/.*:=\s*//')
+            if [ -z "$PKG" ]; then
+              PKG=$(basename "$DIR")
+              echo "📦 $PKG (目录名兜底, $DIR)"
+            else
+              echo "📦 $PKG ($DIR)"
+            fi
+            PLUGIN_DIRS+=("${PKG}:${DIR}")
+          done < <(find "$SEARCH" -maxdepth 3 -name 'Makefile')
 
         if [ ${#PLUGIN_DIRS[@]} -eq 0 ]; then
           echo "❌ 未找到插件"
