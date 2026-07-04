@@ -354,7 +354,10 @@ jobs:
         echo "success_count=${#SUCCESS[@]}" >> $GITHUB_OUTPUT
         echo "failed_count=${#FAILED[@]}" >> $GITHUB_OUTPUT
         echo "timeout_count=${#TIMEOUT_LIST[@]}" >> $GITHUB_OUTPUT
-        echo "failed_list=${FAILED[*]} ${TIMEOUT_LIST[*]}" >> $GITHUB_OUTPUT
+        FL="${FAILED[*]} ${TIMEOUT_LIST[*]}"
+        FL="${FL# }"  # 去掉开头空格
+        FL="${FL% }"  # 去掉结尾空格
+        echo "failed_list=${FL}" >> $GITHUB_OUTPUT
 
         # 所有都失败才算整体失败
         if [ ${#SUCCESS[@]} -eq 0 ] && [ $(( ${#FAILED[@]} + ${#TIMEOUT_LIST[@]} )) -gt 0 ]; then
