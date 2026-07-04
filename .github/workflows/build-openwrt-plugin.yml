@@ -24,7 +24,7 @@ on:
       openwrt_version:
         description: 'OpenWrt SDK 版本'
         required: false
-        default: '25.12.6'
+        default: '25.12.5'
       target_arch:
         description: '目标架构（格式: target subtarget）'
         required: false
