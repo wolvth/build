@@ -243,7 +243,6 @@ set_init_action() {
             fi
             rm -f "$DAE_FAIL"
             ( touch "$DAE_LOCK"
-              mkdir -p "$(dirname "$LOG")"
               # ---- 版本感知更新逻辑 ----
               current_ver=$("$PROG" --version 2>/dev/null | awk 'NR==1{print $3}')
               case "$current_ver" in
