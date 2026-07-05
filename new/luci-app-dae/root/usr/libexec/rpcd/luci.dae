@@ -30,7 +30,8 @@ ensure_directories() {
 	[ ! -f "$CONF" ] && touch "$CONF" && chmod 600 "$CONF"
 }
 
-# ── 【新增】确保 UCI 配置存在（替代删除的 90_dae） ─────────────
+# ── 【新增】确保 UCI 配置存在（替代uci-default/90_dae） ─────────────
+[ ! -f /etc/config/dae ] && touch /etc/config/dae
 ensure_uci_config() {
     if ! uci -q get dae.settings >/dev/null 2>&1; then
         uci set dae.settings=settings
@@ -213,16 +214,13 @@ set_init_action() {
     local name="$1" action="$2"
     [ "$name" = "$NAME" ] || { print_json_bool "result" '0'; return; }
     
-    # 【新增】任何操作前先确保目录和 UCI 配置存在
-    ensure_directories
-    ensure_uci_config
-    
     case "$action" in
         enable|disable|start|stop|restart)
-            # 【新增】启动/重启前检查二进制和配置文件
+			# 【新增】启动/重启前检查二进制和配置文件
+    		ensure_directories
+    		ensure_uci_config
             if [ "$action" = "start" ] || [ "$action" = "restart" ]; then
                 if ! check_dae_binary; then
-                    # 二进制不存在，尝试从 installer 恢复
                     if [ -x "$INSTALLER" ]; then
                         sh "$INSTALLER" install-prerelease >> "$LOG" 2>&1
                     fi
