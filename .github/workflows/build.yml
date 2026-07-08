@@ -409,7 +409,7 @@ jobs:
         if [ -d "$GITHUB_WORKSPACE/$CUSTOM_FILES_DIR" ]; then
           echo "Copying custom files..."
           cp -r $GITHUB_WORKSPACE/$CUSTOM_FILES_DIR openwrt/files
-          chmod -R +x openwrt/files/* || true
+          chmod -R +x openwrt/files/root/sh/* || true
         fi
         
         # 🧩 7. 加载配置文件 (从仓库config/ 目录)
