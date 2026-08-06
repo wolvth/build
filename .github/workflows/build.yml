@@ -433,12 +433,18 @@ jobs:
         
         KERNEL_CONFIG=$(ls target/linux/generic/config-[0-9]*.[0-9]*)
         echo "Target kernel config is: $KERNEL_CONFIG"
-        echo CONFIG_NETKIT=y >> "$KERNEL_CONFIG"
+        
+        echo "CONFIG_NETKIT=y" >> "$KERNEL_CONFIG"
+        echo "CONFIG_IKCONFIG=y" >> "$KERNEL_CONFIG"
+        echo "CONFIG_IKCONFIG_PROC=y" >> "$KERNEL_CONFIG"
 
+        echo "CONFIG_KERNEL_IKCONFIG=y" >> .config
+        echo "CONFIG_KERNEL_IKCONFIG_PROC=y" >> .config
         # 🔴 生成最终配置
         make defconfig
         
         grep "NETKIT" "$KERNEL_CONFIG"
+        grep "IKCONFIG" "$KERNEL_CONFIG"
         grep "OPTIMIZATION" .config
         grep "KERNEL_CFLAGS" .config
         
