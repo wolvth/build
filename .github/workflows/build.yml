@@ -466,12 +466,33 @@ jobs:
         echo "DEVICE_SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
         echo "DEVICE_PROFILE=$PROFILE" >> $GITHUB_ENV
 
+    - name: Install & Configure ccache
+      if: inputs.cache_toolchain == true
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y ccache
+        # Set cache size (adjust as needed) — 保守设置为 5G，避免超出 actions/cache 限制
+        ccache -M 8G || true
+
+        # debug: show ccache wrapper dir and compiler path to verify wrapper is in use
+        ls -l /usr/lib/ccache || true
+        which gcc || true
+        which g++ || true
+
+        mkdir -p $HOME/.ccache
+        echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+        # If system provides ccache wrappers, add them to PATH so compilers get intercepted
+        if [ -d /usr/lib/ccache ]; then
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+        fi
+        ccache -s || true
+        
     # 2️⃣ 缓存工具链 (跳过编译 GCC 的漫长过程)
     - name: Cache Toolchain
       if: inputs.cache_toolchain == true  
       uses: HiGarfield/cachewrtbuild@main
       with:
-        ccache: true   # 这里关掉，因为下面会用官方 cache 处理 ccache
+        ccache: true   # 默认关闭
         prefix: 'openwrt' # 你的源码目录名
         # Key 逻辑：架构没变就复用工具链
         mixkey: ${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
