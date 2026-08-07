@@ -61,7 +61,7 @@ jobs:
     
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       
     - name: Print hardware info
       run: |
@@ -571,7 +571,7 @@ jobs:
         echo "* Build Date: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
 
     - name: Upload to Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       if: inputs.upload_release == true && steps.organize.outputs.status == 'success'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
