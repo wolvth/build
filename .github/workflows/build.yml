@@ -554,12 +554,12 @@ jobs:
         echo "SECURE_DIR=$PWD/upload_out" >> $GITHUB_ENV
 
     - name: Upload Firmware Artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: steps.organize.outputs.status == 'success' && inputs.upload_release != true
       with:
         name: OpenWrt_Encrypted_Artifact
         path: ${{ env.SECURE_DIR }}/*
-        retention-days: 3
+        retention-days: 5
 
     - name: Generate Release Tag
       id: tag
