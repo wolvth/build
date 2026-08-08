@@ -472,7 +472,7 @@ jobs:
         sudo apt-get update -y
         sudo apt-get install -y ccache
         # Set cache size (adjust as needed) — 保守设置为 5G，避免超出 actions/cache 限制
-        ccache -M 8G || true
+        ccache -M 5G || true
 
         # debug: show ccache wrapper dir and compiler path to verify wrapper is in use
         ls -l /usr/lib/ccache || true
@@ -497,6 +497,42 @@ jobs:
         # Key 逻辑：架构没变就复用工具链
         mixkey: ${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
 
+    # Create ccache wrappers for toolchain compilers (ensure cross-compiler names are intercepted)
+    - name: Create ccache wrappers for toolchain compilers
+      if: inputs.cache_toolchain == true
+      run: |
+        # prefer non-sudo wrapper dir in $HOME to avoid permission issues; put wrappers there and prepend PATH
+        WRAPPER_DIR="$HOME/ccache-wrappers"
+        mkdir -p "$WRAPPER_DIR"
+
+        # link common compiler names to /usr/bin/ccache (if exists)
+        CCACHE_BIN="/usr/bin/ccache"
+        if [ -x "$CCACHE_BIN" ]; then
+          # scan likely places for cross compilers produced/used by OpenWrt staging_dir and create wrappers
+          find openwrt/staging_dir -type f -executable 2>/dev/null \
+            \( -iname '*-gcc' -o -iname '*-g++' -o -iname '*-cc' -o -iname '*-c++' \) | while read cc; do
+            bn=$(basename "$cc")
+            if [ ! -e "$WRAPPER_DIR/$bn" ]; then
+              ln -sf "$CCACHE_BIN" "$WRAPPER_DIR/$bn"
+            fi
+          done || true
+
+          # add a few common triplet aliases to be safe
+          for name in aarch64-linux-gnu-gcc aarch64-openwrt-linux-gcc arm-openwrt-linux-gcc aarch64-openwrt-linux-g++; do
+            if [ ! -e "$WRAPPER_DIR/$name" ]; then
+              ln -sf "$CCACHE_BIN" "$WRAPPER_DIR/$name" || true
+            fi
+          done
+        fi
+
+        # Prepend wrapper dir to PATH for subsequent steps
+        echo "$WRAPPER_DIR" >> $GITHUB_PATH
+        echo "PATH=$WRAPPER_DIR:$PATH" >> $GITHUB_ENV
+
+        # debug
+        ls -l "$WRAPPER_DIR" | head -n 50 || true
+        ccache -s || true
+        
     - name: Download Libraries
       working-directory: ./openwrt
       run: |
