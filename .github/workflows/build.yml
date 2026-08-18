@@ -440,6 +440,14 @@ jobs:
 
         echo "CONFIG_KERNEL_IKCONFIG=y" >> .config
         echo "CONFIG_KERNEL_IKCONFIG_PROC=y" >> .config
+
+        echo "CONFIG_KERNEL_BPF_STREAM_PARSER=y" >> .config
+        echo "CONFIG_KERNEL_NETKIT=y" >> .config
+        echo "CONFIG_KERNEL_FTRACE=y" >> .config
+        echo "CONFIG_KERNEL_KPROBES=y" >> .config
+        echo "CONFIG_KERNEL_KPROBE_EVENTS=y" >> .config        
+        echo "CONFIG_KERNEL_FUNCTION_TRACER=y" >> .config
+        echo "CONFIG_KERNEL_DYNAMIC_FTRACE=y" >> .config
         # 🔴 生成最终配置
         make defconfig
         
