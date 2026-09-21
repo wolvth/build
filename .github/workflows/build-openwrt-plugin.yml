@@ -208,7 +208,7 @@ jobs:
 
         # 逐个激活所有识别到的包，以及自动预测对应的翻译包
         for pkg in $BUILD_PACKAGES; do
-          echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+          echo "CONFIG_PACKAGE_${pkg}=m" >> .config
           if [[ "$pkg" == luci-app-* ]]; then
             APP_NAME="${pkg#luci-app-}"
             echo "CONFIG_PACKAGE_luci-i18n-${APP_NAME}-zh-cn=m" >> .config
@@ -277,7 +277,7 @@ jobs:
     - name: 上传产物
       uses: actions/upload-artifact@v6
       with:
-        name: ${{ env.MAIN_PKG }}-${{ env.VERSION }}-${{ env.TARGET }}-${{ env.SUBTARGET }}
+        name: ${{ env.REPO_NAME }}-${{ env.VERSION }}-${{ env.TARGET }}-${{ env.SUBTARGET }}
         path: artifacts/*
         if-no-files-found: error
         retention-days: 90
