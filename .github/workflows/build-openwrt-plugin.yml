@@ -42,6 +42,7 @@ jobs:
         ARCH="${{ inputs.target_arch }}"
         TARGET=$(echo "$ARCH" | awk '{print $1}')
         SUBTARGET=$(echo "$ARCH" | awk '{print $2}')
+        REPO_NAME=$(basename -s .git "${{ inputs.repo_url }}")
         
         echo "VERSION=${{ inputs.openwrt_version }}" >> $GITHUB_ENV
         echo "TARGET=$TARGET"                       >> $GITHUB_ENV
