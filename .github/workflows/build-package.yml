@@ -16,7 +16,7 @@ on:
       package_dir:
         description: '扫描目录（留空=仓库根目录，如 luci 会编译 luci 下所有插件）'
         required: false
-        default: 'new'
+        default: ''
       openwrt_version:
         description: 'OpenWrt SDK 版本'
         required: false
