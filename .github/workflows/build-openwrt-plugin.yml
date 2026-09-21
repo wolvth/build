@@ -244,8 +244,7 @@ jobs:
       run: |
         PKG_NAME="${{ env.PACKAGE_NAME }}"
         echo "🔨 编译 ${PKG_NAME}..."
-        make "package/${PKG_NAME}/clean" V=s -j$(nproc) 2>&1 | tail -3 || true
-        make "package/${PKG_NAME}/compile" V=s -j$(nproc) 2>&1 | tail -50
+        make "package/${PKG_NAME}/compile" V=s -j$(nproc) 2>&1
         echo "✅ 编译完成"
 
     # ── 收集产物 ──────────────────────────────────────────
