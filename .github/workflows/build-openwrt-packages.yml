@@ -324,8 +324,6 @@ jobs:
             echo "══════════════════════════════════"
           fi
 
-          make "package/${PKG}/clean" V=s -j$(nproc) 2>&1 | tail -3 || true
-
           START_TIME=$(date +%s)
 
           # 编译命令（timeout 0 或空 = 不限制）
