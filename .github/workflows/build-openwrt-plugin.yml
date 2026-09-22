@@ -201,22 +201,17 @@ jobs:
     - name: 配置编译选项
       working-directory: sdk
       run: |
-        # 激活全局 LuCI 语言支持（生成翻译包的核心）
-        cat >> .config <<EOF
-        CONFIG_LUCI_LANG_zh_Hans=y
-        EOF
-
-        # 逐个激活所有识别到的包，以及自动预测对应的翻译包
-        for pkg in $BUILD_PACKAGES; do
-          echo "CONFIG_PACKAGE_${pkg}=m" >> .config
-          if [[ "$pkg" == luci-app-* ]]; then
-            APP_NAME="${pkg#luci-app-}"
-            echo "CONFIG_PACKAGE_luci-i18n-${APP_NAME}-zh-cn=m" >> .config
-          fi
+        # 自动将所有有效包的定义激活
+        for dir in $BUILD_DIRS; do
+          MF="package/${dir}/Makefile"
+          # 提取 Makefile 中所有的 Package 定义
+          grep -oE '^[[:space:]]*define[[:space:]]+Package/[^ /:]+' "$MF" | awk '{print $2}' | sed 's#Package/##' | while read -r pkg; do
+            [[ "$pkg" != *'$('* ]] && [ -n "$pkg" ] && echo "CONFIG_PACKAGE_${pkg}=m" >> .config
+          done
         done
 
-        make defconfig 2>&1 | tail -n 15
-        echo "✅ 配置生成就绪"
+        make defconfig 2>&1 | tail -n 5
+        echo "✅ 配置完成"
 
     # ── 9. 执行编译 ──────────────────────────────────────────
     - name: 逐包编译
@@ -224,18 +219,10 @@ jobs:
       run: |
         # 按目录编译各个包（优先依赖编译）
         for dir in $BUILD_DIRS; do
-          echo "🔨 [1/2] 正在编译源码目录: package/${dir} ..."
+          echo "🔨 正在编译源码目录: package/${dir} ..."
           make "package/${dir}/compile" -j$(nproc) || make "package/${dir}/compile" V=s -j1
         done
 
-        # 针对 luci-app 兜底触发编译生成的翻译包
-        for pkg in $BUILD_PACKAGES; do
-          if [[ "$pkg" == luci-app-* ]]; then
-            APP_NAME="${pkg#luci-app-}"
-            echo "🔨 [2/2] 正在构建翻译包: luci-i18n-${APP_NAME}-zh-cn ..."
-            make "package/luci-i18n-${APP_NAME}-zh-cn/compile" -j$(nproc) 2>/dev/null || true
-          fi
-        done
         echo "✅ 全部编译完成"
 
     # ── 10. 收集产物 ─────────────────────────────────────────
