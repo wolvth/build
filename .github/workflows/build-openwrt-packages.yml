@@ -328,12 +328,12 @@ jobs:
 
           # 编译命令（timeout 0 或空 = 不限制）
           if [ "$TIMEOUT_SEC" -gt 0 ]; then
-            COMPILE_CMD="timeout ${TIMEOUT_SEC} make package/${PKG}/compile -j$(nproc)"
+            COMPILE_CMD="timeout ${TIMEOUT_SEC} make package/${PKG}/compile V=s -j$(nproc)"
           else
-            COMPILE_CMD="make package/${PKG}/compile -j$(nproc)"
+            COMPILE_CMD="make package/${PKG}/compile V=s -j$(nproc)"
           fi
 
-          if eval "$COMPILE_CMD" 2>&1 ; then
+          if eval "$COMPILE_CMD" 2>&1 | tail -80; then
             ELAPSED=$(( $(date +%s) - START_TIME ))
             echo "  ✅ $PKG 编译成功 (${ELAPSED}s)"
             SUCCESS+=("$PKG")
