@@ -112,7 +112,7 @@ jobs:
         echo "✅ Feeds 初始化完成"
 
     # ── 7. 完整保留目录结构平铺放入 SDK ──────────────────────
-    - name: 部署源码
+    - name: 部署源码并保留原始目录拓扑
       working-directory: sdk
       run: |
         REPO_DIR="/tmp/${REPO_NAME}"
@@ -122,36 +122,64 @@ jobs:
         SRC_ROOT="$REPO_DIR"
         if [ -n "$PLUGIN_SUBDIR" ]; then
           SRC_ROOT="$REPO_DIR/$PLUGIN_SUBDIR"
+          if [ ! -d "$SRC_ROOT" ]; then
+            echo "❌ 指定子目录不存在: $PLUGIN_SUBDIR"
+            exit 1
+          fi
         fi
 
-        mkdir -p package/custom
-        cp -rT "$SRC_ROOT" package/custom/
+        # 区分单包仓库与多包聚合仓库
+        if [ -f "$SRC_ROOT/Makefile" ]; then
+          # 模式 A: 根目录本身就是单包
+          PKG_NAME=$(basename "$SRC_ROOT")
+          [ "$PKG_NAME" = "$REPO_NAME" ] && PKG_NAME=$(grep -E '^[[:space:]]*PKG_NAME[[:space:]]*[:?+]?=' "$SRC_ROOT/Makefile" | head -n1 | sed -E 's/.*=[[:space:]]*//' | tr -d '\r ' || echo "$REPO_NAME")
+          
+          mkdir -p "package/$PKG_NAME"
+          cp -rT "$SRC_ROOT" "package/$PKG_NAME"
+          echo "📂 单包模式部署至: package/$PKG_NAME"
+        else
+          # 模式 B: 多包聚合仓库（如 QNatter），必须原汁原味平铺拷贝，保持兄弟目录（如 go-qnatter）的相对路径不变！
+          cp -rT "$SRC_ROOT" "package"
+          echo "📂 多包模式：已将仓库所有文件夹平铺完整部署进 package/"
+        fi
 
-        # 修复 www -> htdocs
-        find package/custom -type d -name "www" 2>/dev/null | while read -r w; do
+        # 修复 www -> htdocs 结构与 luci.mk 相对路径
+        find package/ -type d -name "www" 2>/dev/null | while read -r w; do
           pdir=$(dirname "$w")
           mkdir -p "$pdir/htdocs"
           cp -rT "$w" "$pdir/htdocs"
           rm -rf "$w"
         done
+        find package/ -name "Makefile" -exec sed -i 's#\.\./\.\./luci\.mk#$(TOPDIR)/feeds/luci/luci.mk#g' {} + 2>/dev/null || true
 
-        # 仅扫描 package/custom 下的 1~2 级目录，且必须包含 package.mk 或 luci.mk（过滤掉纯 C/Go 源码内部的 Makefile）
-        VALID_DIRS=()
+        # 智能识别哪些是可构建的 package（寻找带 Makefile 的一级子目录）
+        declare -a DETECTED_PKGS=()
+        declare -a DETECTED_DIRS=()
+
         while read -r mk; do
-          if grep -qE '(package\.mk|luci\.mk)' "$mk"; then
-            DIR_PATH=$(dirname "$mk")
-            REL_DIR="${DIR_PATH#package/}"
-            VALID_DIRS+=("$REL_DIR")
+          P_DIR=$(basename "$(dirname "$mk")")
+          DETECTED_DIRS+=("$P_DIR")
+
+          # 从 Makefile 提取包名
+          DEFS=$(grep -oE '^[[:space:]]*define[[:space:]]+Package/[^ /:]+' "$mk" | awk '{print $2}' | sed 's#Package/##' || true)
+          FOUND=0
+          for p in $DEFS; do
+            if [[ "$p" != *'$('* ]] && [ -n "$p" ]; then
+              DETECTED_PKGS+=("$p")
+              FOUND=1
+            fi
+          done
+          
+          if [ $FOUND -eq 0 ]; then
+            PK_VAL=$(grep -E '^[[:space:]]*PKG_NAME[[:space:]]*[:?+]?=' "$mk" | head -n1 | sed -E 's/.*=[[:space:]]*//' | tr -d '\r ' || true)
+            if [ -n "$PK_VAL" ] && [[ "$PK_VAL" != *'$('* ]]; then
+              DETECTED_PKGS+=("$PK_VAL")
+            else
+              DETECTED_PKGS+=("$P_DIR") # Fallback 到目录名
+            fi
           fi
-        done < <(find package/custom -maxdepth 2 -name "Makefile")
+        done < <(find package/ -mindepth 2 -maxdepth 2 -name "Makefile" ! -path "package/feeds/*")
 
-        echo "=========================================="
-        echo "📁 真正有效的 OpenWrt 包目录: ${VALID_DIRS[*]}"
-        echo "=========================================="
-
-        echo "BUILD_DIRS=${VALID_DIRS[*]}" >> $GITHUB_ENV
-        echo "REPO_DIR=$REPO_DIR" >> $GITHUB_ENV
-        
         # 若手动指定了包名则以手动为主
         INPUT_NAME="${{ inputs.package_name }}"
         if [ -n "$INPUT_NAME" ]; then
@@ -162,13 +190,12 @@ jobs:
         FINAL_DIRS=($(echo "${DETECTED_DIRS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
 
         echo "=========================================="
-        echo "📁 待编译的相对目录: ${FINAL_DIRS[*]}"
+        echo "📁 待编译的源码目录: ${FINAL_DIRS[*]}"
         echo "📦 识别到的待编译包: ${FINAL_PKGS[*]}"
         echo "=========================================="
 
         echo "BUILD_PACKAGES=${FINAL_PKGS[*]}" >> $GITHUB_ENV
-        #echo "BUILD_DIRS=${FINAL_DIRS[*]}" >> $GITHUB_ENV
-        echo "REPO_DIR=$REPO_DIR" >> $GITHUB_ENV
+        echo "BUILD_DIRS=${FINAL_DIRS[*]}" >> $GITHUB_ENV
 
     # ── 8. 配置编译选项（启用 i18n 与多包） ────────────────────
     - name: 配置编译选项
