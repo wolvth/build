@@ -252,11 +252,21 @@ jobs:
       run: |
         PKG_NAME="${{ env.PACKAGE_NAME }}"
         mkdir -p artifacts
+        
+        # 收集所有 ipk / apk
+        #find sdk/bin -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} artifacts/ \;
+        
+        # 主包 + 对应的 i18n 包
+        # luci-app-xxx        -> luci-app-xxx
+        # luci-i18n-xxx-zh-cn -> 由主包名推导
+        I18N_NAME="${PKG_NAME/luci-app-/luci-i18n-}"
 
-        for ext in apk ipk; do
-          find sdk/bin -type f -name "*${PKG_NAME}*.${ext}" 2>/dev/null | while read f; do
-            echo "📦 $(basename "$f")"
-            cp "$f" artifacts/
+        for pattern in "$PKG_NAME" "$I18N_NAME"; do
+          for ext in apk ipk; do
+            find sdk/bin -type f -name "*${pattern}*.${ext}" 2>/dev/null | while read f; do
+              echo "📦 $(basename "$f")"
+              cp "$f" artifacts/
+            done
           done
         done
 
