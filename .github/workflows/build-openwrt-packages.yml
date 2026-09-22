@@ -369,16 +369,22 @@ jobs:
     - name: 收集编译产物
       run: |
         mkdir -p artifacts
-        TOTAL=0
 
+        # 直接从 bin 目录下收集所有生成的 ipk 和 apk（简单粗暴且最稳健，绝不漏包）
+        find sdk/bin/ -type f \( -name "*.ipk" -o -name "*.apk" \) -not -path "*/packages/*" 2>/dev/null | while IFS= read -r f; do
+          echo "  📦 $(basename "$f")"
+          cp "$f" artifacts/
+        done
+
+        # 如果 SDK 打包目录层级较深，也可以用这种按短名兼容匹配：
         while read -r PKG; do
           [ -z "$PKG" ] && continue
-          for ext in apk ipk; do
-            find sdk/bin -type f -name "*${PKG}*.${ext}" 2>/dev/null | while read f; do
-              echo "  📦 $(basename "$f")"
-              cp "$f" artifacts/
-              TOTAL=$((TOTAL + 1))
-            done
+          # 截取核心名字，如 luci-app-duck -> duck
+          SHORT_NAME="${PKG#luci-app-}"
+          SHORT_NAME="${SHORT_NAME#luci-}"
+
+          find sdk/bin -type f \( -name "*${PKG}*.ipk" -o -name "*${SHORT_NAME}*.ipk" -o -name "*${PKG}*.apk" -o -name "*${SHORT_NAME}*.apk" \) 2>/dev/null | while IFS= read -r f; do
+            [ -f "$f" ] && cp -n "$f" artifacts/
           done
         done < /tmp/plugin_names.txt
 
@@ -389,7 +395,7 @@ jobs:
         if [ ! "$(ls -A artifacts/ 2>/dev/null)" ]; then
           echo "⚠️ 无编译产物"
         fi
-
+        
     - name: 上传产物
       uses: actions/upload-artifact@v6
       with:
