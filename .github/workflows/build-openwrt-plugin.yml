@@ -103,15 +103,7 @@ jobs:
         tar -axf sdk.tar.zst -C sdk --strip-components=1
         echo "✅ SDK 解压完成"
 
-    # ── 6. 初始化 Feeds ──────────────────────────────────────
-    - name: 初始化 Feeds
-      working-directory: sdk
-      run: |
-        ./scripts/feeds update -a >/dev/null 2>&1
-        ./scripts/feeds install -a >/dev/null 2>&1
-        echo "✅ Feeds 初始化完成"
-
-    # ── 7. 完整保留目录结构平铺放入 SDK ──────────────────────
+    # ── 6. 完整保留目录结构平铺放入 SDK ──────────────────────
     - name: 部署源码并保留原始目录拓扑
       working-directory: sdk
       run: |
@@ -147,6 +139,10 @@ jobs:
         declare -a DETECTED_DIRS=()
 
         while read -r mk; do
+          # 只认真正的 OpenWrt 包 Makefile（含 rules.mk / luci.mk include 或 define Package/），
+          # 跳过 src/、po/ 等内部构建脚本，避免误生成 package/custom/xxx/src/compile 这类无效目标
+          grep -qE '^[[:space:]]*include[[:space:]]+.*(rules\.mk|luci\.mk)|^[[:space:]]*define[[:space:]]+Package/' "$mk" || continue
+
           DIR_PATH=$(dirname "$mk")
           # 提取相对于 package/ 的路径
           REL_DIR="${DIR_PATH#package/}"
@@ -170,7 +166,7 @@ jobs:
               DETECTED_PKGS+=("$(basename "$DIR_PATH")")
             fi
           fi
-        done < <(find package/custom -name "Makefile")
+        done < <(find package/custom -name "Makefile" -not -path "*/.git/*")
 
         # 若手动指定了包名则以手动为主
         INPUT_NAME="${{ inputs.package_name }}"
@@ -189,6 +185,14 @@ jobs:
         echo "BUILD_PACKAGES=${FINAL_PKGS[*]}" >> $GITHUB_ENV
         echo "BUILD_DIRS=${FINAL_DIRS[*]}" >> $GITHUB_ENV
         echo "REPO_DIR=$REPO_DIR" >> $GITHUB_ENV
+
+    # ── 7. 初始化 Feeds ──────────────────────────────────────
+    - name: 初始化 Feeds
+      working-directory: sdk
+      run: |
+        ./scripts/feeds update -a >/dev/null 2>&1
+        ./scripts/feeds install -a >/dev/null 2>&1
+        echo "✅ Feeds 初始化完成"
 
     # ── 8. 配置编译选项（启用 i18n 与多包） ────────────────────
     - name: 配置编译选项
@@ -213,7 +217,7 @@ jobs:
         # 按目录编译各个包（优先依赖编译）
         for dir in $BUILD_DIRS; do
           echo "🔨 正在编译源码目录: package/${dir} ..."
-          make "package/${dir}/compile" -j$(nproc) || make "package/${dir}/compile" V=s -j1
+          make "package/${dir}/compile" V=s -j$(nproc)  2>&1 | tail -80
         done
 
         echo "✅ 全部编译完成"
