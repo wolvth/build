@@ -225,41 +225,52 @@ jobs:
     - name: 放入插件源码
       working-directory: sdk
       run: |
-        PLACED=0
+        PKG_DIR="${{ env.PACKAGE_DIR }}"
+        if [ -n "$PKG_DIR" ] && [ -d "/tmp/plugin-repo/${PKG_DIR}" ]; then
+          SRC_DIR="/tmp/plugin-repo/${PKG_DIR}"
+        else
+          SRC_DIR="/tmp/plugin-repo"
+        fi
+
+        echo "📦 整体放入源码目录: $SRC_DIR"
+        mkdir -p package/custom
+        
+        # 排除 .git，把整个目录（含 go-qnatter、qnatter、luci-app-qnatter）完整拷入，保持相对路径完整
+        rsync -a --exclude='.git' "$SRC_DIR/" package/custom/
+
+        # 遍历所有需要处理的包，执行 www->htdocs 修正及清理 LUCI_DEPENDS
         while IFS= read -r entry; do
           [ -z "$entry" ] && continue
           PKG="${entry%%:*}"
-          SRC="${entry#*:}"
 
-          # 清理同名包
+          # 清理官方 feeds 中的同名包，防止冲突
           rm -rf "package/feeds/luci/${PKG}" \
-                 "feeds/luci/applications/${PKG}" \
-                 "package/${PKG}" 2>/dev/null || true
+                 "feeds/luci/applications/${PKG}" 2>/dev/null || true
 
-          # 拷贝
-          cp -rT "$SRC" "package/${PKG}"
-
-          # 删除 LUCI_DEPENDS
-          if [ -f "package/${PKG}/Makefile" ] && grep -q 'LUCI_DEPENDS' "package/${PKG}/Makefile"; then
-            sed -i '/^LUCI_DEPENDS:/d' "package/${PKG}/Makefile"
+          # 在 package/custom 查找该插件实际所在目录
+          TARGET_DIR=$(find package/custom -maxdepth 3 -name Makefile -exec grep -lE "PKG_NAME.*(:=|=)\s*${PKG}" {} + 2>/dev/null | head -n1 | xargs -r dirname)
+          if [ -z "$TARGET_DIR" ]; then
+            TARGET_DIR=$(find package/custom -maxdepth 3 -type d -name "$PKG" | head -n1)
           fi
 
-          # www/ → htdocs/
-          if [ -d "package/${PKG}/www" ]; then
-            if [ -d "package/${PKG}/htdocs" ]; then
-              cp -rT "package/${PKG}/www" "package/${PKG}/htdocs"
-              rm -rf "package/${PKG}/www"
-            else
-              mv "package/${PKG}/www" "package/${PKG}/htdocs"
+          if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
+            # 删除 LUCI_DEPENDS 防止强依赖不存在的官方包
+            if [ -f "${TARGET_DIR}/Makefile" ] && grep -q 'LUCI_DEPENDS' "${TARGET_DIR}/Makefile"; then
+              sed -i '/^LUCI_DEPENDS:/d' "${TARGET_DIR}/Makefile"
             fi
+
+            # 兼容处理 www/ -> htdocs/
+            if [ -d "${TARGET_DIR}/www" ]; then
+              if [ -d "${TARGET_DIR}/htdocs" ]; then
+                cp -rT "${TARGET_DIR}/www" "${TARGET_DIR}/htdocs"
+                rm -rf "${TARGET_DIR}/www"
+              else
+                mv "${TARGET_DIR}/www" "${TARGET_DIR}/htdocs"
+              fi
+            fi
+            echo "  ✅ 映射成功: $PKG -> $TARGET_DIR"
           fi
-
-          echo "  ✅ $PKG"
-          PLACED=$((PLACED + 1))
         done < /tmp/plugin_list.txt
-
-        echo ""
-        echo "✅ 放入 $PLACED 个插件"
 
     # ── 配置 ──────────────────────────────────────────────
     - name: 配置编译选项
