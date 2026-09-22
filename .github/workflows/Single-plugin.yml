@@ -234,7 +234,7 @@ jobs:
         cat > .config <<EOF
         CONFIG_PACKAGE_${PKG_NAME}=y
         EOF
-        make defconfig 2>&1 | tail -30 || true
+        make defconfig 2>&1 | tail -20 || true
         echo "✅ 配置完成"
         grep "CONFIG_PACKAGE_${PKG_NAME}" .config || echo "⚠️ 未找到 ${PKG_NAME}"
 
@@ -244,7 +244,7 @@ jobs:
       run: |
         PKG_NAME="${{ env.PACKAGE_NAME }}"
         echo "🔨 编译 ${PKG_NAME}..."
-        make "package/${PKG_NAME}/compile" -j$(nproc) || make V=s -j1 "package/${PKG_NAME}/compile"
+        make "package/${PKG_NAME}/compile" -j$(nproc) 2>&1 | tail -50
         echo "✅ 编译完成"
 
     # ── 收集产物 ──────────────────────────────────────────
