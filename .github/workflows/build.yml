@@ -442,6 +442,27 @@ jobs:
         echo "CONFIG_KERNEL_KPROBE_EVENTS=y" >> .config        
         echo "CONFIG_KERNEL_FUNCTION_TRACER=y" >> .config
         echo "CONFIG_KERNEL_DYNAMIC_FTRACE=y" >> .config
+
+        # 1. BPF 核心基础设施
+        echo "CONFIG_KERNEL_BPF=y" >> .config
+        echo "CONFIG_KERNEL_BPF_SYSCALL=y" >> .config
+        echo "CONFIG_KERNEL_BPF_JIT=y" >> .config
+        echo "CONFIG_KERNEL_CGROUP_BPF=y" >> .config
+        
+        # 2. 网络分类与流量控制 (TC) BPF 支持
+        echo "CONFIG_KERNEL_NET_CLS_BPF=y" >> .config
+        echo "CONFIG_KERNEL_NET_SCH_INGRESS=y" >> .config
+        echo "CONFIG_KERNEL_NET_CLS_ACT=y" >> .config
+        echo "CONFIG_KERNEL_NET_NS=y" >> .config
+        
+        # 3. Netfilter & Nftables / NFQUEUE 内核级支持
+        echo "CONFIG_KERNEL_NF_TABLES=y" >> .config
+        echo "CONFIG_KERNEL_NF_TABLES_INET=y" >> .config
+        echo "CONFIG_KERNEL_NETFILTER_NETLINK_QUEUE=y" >> .config
+        echo "CONFIG_KERNEL_NFNETLINK_QUEUE=y" >> .config
+        
+        echo "CONFIG_KERNEL_TRACEPOINTS=y" >> .config
+        echo "CONFIG_KERNEL_NET_TRACEPOINTS=y" >> .config
         # 🔴 生成最终配置
         make defconfig
         
