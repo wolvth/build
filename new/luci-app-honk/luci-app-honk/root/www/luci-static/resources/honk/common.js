@@ -382,14 +382,16 @@ function ensureEditorStyles() {
 		'.CodeMirror {',
 		'	border: 1px solid ' + C.border + ' !important;',
 		'	border-radius: 4px;',
-		'	height: auto;',
-		'	min-height: 420px;',
 		'	font-family: var(--font-mono, monospace);',
 		'	font-size: 13px;',
 		'	background: ' + C.editorBg + ' !important;',
 		'	color: ' + C.editorFg + ' !important;',
 		'	box-shadow: none;',
 		'}',
+		'.CodeMirror-scroll {',
+		'	background: ' + C.editorBg + ' !important;',
+		'}',
+
 		'.CodeMirror-scroll { background: ' + C.editorBg + ' !important; }',
 		'.CodeMirror-gutters {',
 		'	border-right: 1px solid ' + C.border + ' !important;',
@@ -591,7 +593,13 @@ function initCodeMirror(textarea, onSaveCallback) {
 			foldGutter: true,
 			gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter']
 		});
+
 		textarea._editor = editor;
+
+		var maxH = 400;   // 封顶高度
+		var contentH = editor.getScrollInfo().height + 20;
+		editor.setSize(null, Math.min(contentH, maxH));
+		editor.getScrollerElement().style.overflow = 'auto';
 
 		var syncTextarea = function() {
 			textarea.value = editor.getValue();
