@@ -4,6 +4,7 @@
 'require ui';
 'require uci';
 'require honk.common as honk';
+'require honk.dashprofiles as dash';
 
 return view.extend({
 	load: function() {
@@ -26,8 +27,10 @@ return view.extend({
 
 		o = s.option(form.ListValue, 'dashboard', _('Dashboard Type'));
 		o.value('none', _('None'));
-		o.value('zashboard', 'Zashboard');
-		o.value('doona', _('Doona'));
+		// 新版：从 dashprofiles 动态生成选项
+		Object.keys(dash.profiles).forEach(function(k) {
+			o.value(k, dash.profiles[k].label());
+		});
 		o.default = 'none';
 		o.renderWidget = function(section_id, option_index, cfgvalue) {
 			var widgetNode;
@@ -72,15 +75,35 @@ return view.extend({
 
 		return this.handleSave(ev).then(function() {
 			var newDash = uci.get('honk', sid, 'dashboard') || 'none';
+
 			if (newDash !== oldDash) {
-				return honk.callHonkSwitchDashboardApi(newDash);
-			} else {
-				return honk.callHonkReload();
+				// 新版：切换面板并等待服务真正起来
+				return honk.switchDashboardAndWait(newDash).then(function(res) {
+					if (res && res.pending)
+						honk.showNotification(null, E('p', _('Saved, but the panel files are not installed yet — download the panel first.')), 'warning');
+					else if (res.running === false)
+						throw new Error(_('HONK did not come back up; check the logs'));
+				});
 			}
+
+			return honk.callHonkReload().then(function(resp) {
+				if (!resp || resp.success === false)
+					throw new Error((resp && resp.message) || _('Service did not accept the request'));
+
+				if (!honk.isServiceEnabled())
+					return;
+
+				return honk.waitForHonkState(true).then(function(st) {
+					if (st.running === false)
+						throw new Error(_('HONK did not come back up; check the logs'));
+				});
+			});
 		}).then(function() {
 			return ui.changes.apply(mode == '0');
 		}).then(function() {
 			honk.refreshConnectionUrl();
+		}).catch(function(err) {
+			honk.showNotification(null, E('p', _('Failed to apply configuration:') + ' ' + (err.message || err)), 'error');
 		});
 	}
 });
