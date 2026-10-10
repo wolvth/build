@@ -7,7 +7,8 @@ readonly LOG="/var/log/dae/dae.log"
 readonly LOG_DIR="/var/log/dae"
 readonly CONF_DIR="/etc/dae"
 readonly INSTALLER="/usr/share/dae/installer.sh"
-readonly ACTIONS_SCRIPT="/root/sh/updae_from_actions.sh"
+readonly ACTIONS_SCRIPT="/root/sh/dae/updae_from_actions.sh"
+readonly THIRD_PARTY="/usr/share/dae/third-party.sh"
 readonly GEO_LOCK="/var/run/dae-geo-update.lock"
 readonly DAE_LOCK="/var/run/dae-update.lock"
 readonly GEOIP="/usr/share/dae/geoip.dat"
@@ -27,7 +28,7 @@ ensure_directories() {
 }
 
 # ── 确保 UCI 配置存在 ──────────────────────────────────────
-[ ! -f /etc/config/dae ] && touch /etc/config/dae
+    [ ! -f /etc/config/dae ] && touch /etc/config/dae
 ensure_uci_config() {
     if ! uci -q get dae.config >/dev/null 2>&1; then
         uci set dae.config=dae
@@ -36,7 +37,7 @@ ensure_uci_config() {
         uci set dae.config.disable_waiting_network='0'
         uci set dae.config.enable_dae_log='1'
         uci set dae.config.log_maxbackups='1'
-        uci set dae.config.log_maxsize='3'
+        uci set dae.config.log_maxsize='1'
         uci commit dae
     fi
 }
@@ -55,7 +56,40 @@ is_running() {
 get_version() { "$PROG" --version 2>/dev/null | awk 'NR==1{print $3}'; }
 print_json_bool() { json_init; json_add_boolean "$1" "$2"; json_dump; json_cleanup; }
 
-# ── 进程资源监控 ───────────────────────────────────────────
+# ── 更新渠道相关 ───────────────────────────────────────────
+get_update_channel() {
+    local channel
+    config_load "$NAME"
+    config_get channel "config" "update_channel" "official"
+    echo "$channel"
+}
+
+_do_download() {
+    local channel="$1"
+    case "$channel" in
+        official)
+            sh "$INSTALLER" install-prerelease >> "$LOG" 2>&1
+            ;;
+        action)
+            if [ -f "$ACTIONS_SCRIPT" ] && [ -x "$ACTIONS_SCRIPT" ]; then
+                sh "$ACTIONS_SCRIPT" >> "$LOG" 2>&1
+            else
+                echo "[download] Actions script not found: $ACTIONS_SCRIPT" >> "$LOG"
+                return 1
+            fi
+            ;;
+        third_party)
+            if [ -f "$THIRD_PARTY" ] && [ -x "$THIRD_PARTY" ]; then
+                sh "$THIRD_PARTY" install-nightly >> "$LOG" 2>&1
+            else
+                echo "[download] Third-party script not found: $THIRD_PARTY" >> "$LOG"
+                return 1
+            fi
+            ;;
+    esac
+}
+
+# ── 进程资源监控 (后端仅提取原始数据) ───────────────────────────────────────────
 get_process_stats() {
     local pid rss_kb vm_kb threads uptime_str
     pid="$(pidof dae 2>/dev/null | awk '{print $1}')"
@@ -117,8 +151,9 @@ get_process_stats() {
 # ── 获取服务状态 ───────────────────────────────────────────
 get_init_status() {
     local name="$1"
-    local version
+    local version channel
     version="$(get_version)"
+    channel="$(get_update_channel)"
     json_init
     json_add_object "$name"
     if is_enabled "$name"; then
@@ -132,6 +167,7 @@ get_init_status() {
         json_add_boolean 'running' '0'
     fi
     json_add_string 'version' "$version"
+    json_add_string 'update_channel' "$channel"
     if [ -f "$GEO_LOCK" ]; then
         json_add_boolean 'geo_updating' '1'
     else
@@ -180,32 +216,28 @@ set_init_action() {
                 print_json_bool "result" '0'
             fi
             ;;
-        # --- 只保存配置，不触发 dae reload ---
+        set_channel:*)
+            local ch="${action#set_channel:}"
+            if [ -n "$ch" ]; then
+                uci set dae.config.update_channel="$ch" 2>/dev/null
+                uci commit dae 2>/dev/null
+            fi
+            print_json_bool "result" "1"
+            ;;
+        # ---注释掉hot_reload行 就只保存配置，不reload ---
         reload_config)
+            /etc/init.d/dae hot_reload >/dev/null 2>&1
             print_json_bool "result" "1"
             ;;
         update)
+            local channel
+            channel="$(get_update_channel)"
             if [ -f "$DAE_LOCK" ]; then
                 print_json_bool "result" '0'; return
             fi
             rm -f "$DAE_FAIL"
             ( touch "$DAE_LOCK"
-			# ---- 版本感知更新逻辑 ----
-              current_ver=$("$PROG" --version 2>/dev/null | awk 'NR==1{print $3}')
-              case "$current_ver" in
-                  unstable-*|dev-*|nightly-*|snapshot-*|ci-*)
-                      if [ -f "$ACTIONS_SCRIPT" ] && [ -x "$ACTIONS_SCRIPT" ]; then
-                          sh "$ACTIONS_SCRIPT" >> "$LOG" 2>&1
-                      else
-                          echo "[update] Actions 版本但 $ACTIONS_SCRIPT 不存在" >> "$LOG"
-                          echo "[update] 回退到 installer.sh" >> "$LOG"
-                          sh "$INSTALLER" install-prerelease >> "$LOG" 2>&1
-                      fi
-                      ;;
-                  *)
-                      sh "$INSTALLER" install-prerelease >> "$LOG" 2>&1
-                      ;;
-              esac
+              _do_download "$channel"
               rc=$?
               rm -f "$DAE_LOCK"
               [ $rc -eq 0 ] || touch "$DAE_FAIL" ) &

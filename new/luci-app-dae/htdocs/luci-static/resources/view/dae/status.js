@@ -259,6 +259,49 @@ var statusWidget = baseclass.extend({
 				]);
 			}
 
+			// ── Update channel selector ─────────────────────────
+			var currentChannel = s.update_channel || "official";
+
+			var channelOptions = [
+				{ value: "official",    label: _("Official (GitHub Release)") },
+				{ value: "action",      label: _("GitHub Actions") },
+				{ value: "third_party", label: _("nightly mirror") },
+			];
+
+			var channelSelect = E("select", {
+				class: "cbi-input-select",
+				style: "width:165px;padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-size:.9em;",
+				change: function(ev) {
+					var newChannel = ev.target.value;
+					_setInitAction(NAME, "set_channel:" + newChannel).then(function(res) {
+						var ok = (res && typeof res === 'object') ? res.result : res;
+						if (ok) {
+							ui.addNotification(null,
+								E("p", "\u2713 " + _("Update channel changed to: %s").format(newChannel)),
+								"info");
+						} else {
+							ui.addNotification(null,
+								E("p", "\u2717 " + _("Failed to change update channel")),
+								"error");
+						}
+					}).catch(function() {
+						ui.addNotification(null,
+							E("p", "\u2717 " + _("Failed to change update channel")),
+							"error");
+					});
+				},
+			}, channelOptions.map(function(opt) {
+				return E("option", {
+					value: opt.value,
+					selected: opt.value === currentChannel ? "selected" : null,
+				}, opt.label);
+			}));
+
+			var channelDiv = E("div", { class: "cbi-value" }, [
+				E("label", { class: "cbi-value-title" }, _("Update Channel")),
+				E("div", { class: "cbi-value-field" }, [channelSelect]),
+			]);
+
 			// ── Update buttons ───────────────────────────────────
 			function startPolling(statusEl, btn, lockField, doneMsg) {
 				statusEl.textContent = "\u23f3 " + _("Updating...");
@@ -334,12 +377,12 @@ var statusWidget = baseclass.extend({
 				E("div", { class: "cbi-value-field" }, [
 					updBtn("Update dae",           "update",     "dae_updating", s.dae_updating),
 					btn_gapl,
-					updBtn("Update Geo databases", "update_geo", "geo_updating", s.geo_updating),
+					updBtn("Update Geo", "update_geo", "geo_updating", s.geo_updating),
 					geoDateEl,
 				]),
 			]);
 
-			if (!s.version) return E("div", {}, [statusDiv, compatEl, updDiv]);
+			if (!s.version) return E("div", {}, [statusDiv, compatEl, channelDiv, updDiv]);
 
 			// ── Service control ──────────────────────────────────
 			var btn_gap  = E("span", {}, "\u00a0\u00a0");
@@ -401,7 +444,7 @@ var statusWidget = baseclass.extend({
 				]),
 			]);
 
-			return E("div", {}, [statusDiv, compatEl, ctrlDiv, updDiv]);
+			return E("div", {}, [statusDiv, compatEl, ctrlDiv, channelDiv, updDiv]);
 		});
 	},
 });
