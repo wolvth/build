@@ -2,8 +2,12 @@
 
 'use strict';
 
-import { readfile, writefile, popen, stat } from 'fs';
+import { readfile, writefile, popen, stat, glob } from 'fs';
 import { cursor } from 'uci';
+
+/* ============================================================
+ * 1. 基础配置与路径常量
+ * ============================================================ */
 
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = "9527";
@@ -38,22 +42,41 @@ function is_safe_ui_dir(path) {
 }
 
 /* ============================================================
- * 定制：进程与状态采集（保留你的实现）
+ * 2. 进程状态与探针采集 (定制功能，针对嵌入式低开销优化)
  * ============================================================ */
 
+let cached_pid = null;
+
+function is_honk_pid(pid) {
+	if (!pid)
+		return false;
+
+	let comm = readfile("/proc/" + pid + "/comm");
+	if (comm)
+		return trim(comm) == "honk-core";
+
+	let cmd = readfile("/proc/" + pid + "/cmdline");
+	return cmd ? match(cmd, /honk-core/) : false;
+}
+
 function get_honk_pid() {
+	if (cached_pid && is_honk_pid(cached_pid))
+		return cached_pid;
+
+	cached_pid = null;
+
 	let p = popen("pidof honk-core 2>/dev/null");
 	let pids = p ? p.read("all") : "";
 	if (p) p.close();
 	let m = match(pids, /([0-9]+)/);
-	return m ? m[1] : null;
+	cached_pid = m ? m[1] : null;
+	return cached_pid;
 }
 
 function get_autostart() {
-	let p = popen("ls /etc/rc.d/S*honk 2>/dev/null");
-	let out = p ? p.read("all") : "";
-	if (p) p.close();
-	return match(out, /\S/) ? true : false;
+	// 使用 ucode 内置 glob 替代 popen("ls ...")，避免每次轮询产生子进程开销
+	let files = glob("/etc/rc.d/S*honk");
+	return (files && length(files) > 0);
 }
 
 let _clk_tck = 0;
@@ -106,12 +129,20 @@ function get_cpu_usage(pid, st, up) {
 	let total = st.utime + st.stime;
 	let cache_file = "/tmp/honk.cpu.cache";
 	let m = match(trim(readfile(cache_file) || ""), /^([0-9]+)\s+([0-9.]+)\s+([0-9]+)$/);
-	writefile(cache_file, sprintf("%s %.2f %d", pid, up, total));
-	if (!m || +m[1] != +pid) return null;
+
+	if (!m || +m[1] != +pid) {
+		writefile(cache_file, sprintf("%s %.2f %d", pid, up, total));
+		return null;
+	}
+
 	let dt_wall = up - (+m[2]);
+	// 若并发请求或刷新过快，暂不覆写缓存文件，避免时间戳跨度被破坏
+	if (dt_wall < 0.5) return null;
+
+	writefile(cache_file, sprintf("%s %.2f %d", pid, up, total));
 	let dt_cpu = (total - (+m[3])) * 1.0 / get_clk_tck();
-	if (dt_wall < 0.5 || dt_cpu < 0) return null;
-	return sprintf("%.1f%%", dt_cpu / dt_wall * 100);
+	if (dt_cpu < 0) return null;
+	return sprintf("%.1f%%", (dt_cpu / dt_wall) * 100);
 }
 
 function get_honk_version() {
@@ -126,7 +157,7 @@ function get_honk_version() {
 }
 
 /* ============================================================
- * 通用：dae 注释剥离 & 括号块解析（采用上游新版）
+ * 3. 配置文件解析引擎 (与上游实现完全对齐)
  * ============================================================ */
 
 function strip_dae_comments(content) {
@@ -233,10 +264,6 @@ function remove_bracket_block(content, header_regex) {
 	return join("\n", new_lines);
 }
 
-/* ============================================================
- * native_api / clash_api 解析（保留你的扩展字段）
- * ============================================================ */
-
 function parse_host_port(addr) {
 	let res = { host: "", port: "" };
 	if (!addr) return res;
@@ -286,6 +313,7 @@ function parse_native_api(clean_content) {
 	return res;
 }
 
+// [定制扩展] 兼容检测旧版或替代协议的 clash_api 监听端口
 function parse_clash_api(clean_content) {
 	let block = extract_bracket_block(clean_content, /clash_api\s*\{/);
 	if (!block) return null;
@@ -295,10 +323,6 @@ function parse_clash_api(clean_content) {
 	let hp = parse_host_port(listen);
 	return { listen: listen, host: hp.host, port: hp.port };
 }
-
-/* ============================================================
- * 配置文件路径 / api 配置读取（采用上游新版）
- * ============================================================ */
 
 function get_config_file_path() {
 	let u = cursor();
@@ -380,8 +404,42 @@ function clean_legacy_api_from_config(config_file) {
 	}
 }
 
+// [定制扩展] 连接地址探针：优先 api.dae，降级回退到 config.dae
+function find_listen_in_file(path) {
+	let content = readfile(path) || "";
+	let clean = strip_dae_comments(content);
+	let parsed_native = parse_native_api(clean);
+	if (parsed_native && parsed_native.listen) {
+		return { listen: parsed_native.listen, host: parsed_native.host, port: parsed_native.port, source: path };
+	}
+	let clash = parse_clash_api(clean);
+	if (clash && clash.listen) {
+		return { listen: clash.listen, host: clash.host, port: clash.port, source: path };
+	}
+	return null;
+}
+
+function get_connection(req) {
+	let res = { configured: false, listen: "", host: "", port: "", source: "" };
+
+	// 保持与 get_api_config 相同的查找优先级 (api.dae 优先)
+	let files = [ get_api_file_path(), get_config_file_path() ];
+	for (let idx, f in files) {
+		let hit = find_listen_in_file(f);
+		if (hit) {
+			res.listen = hit.listen;
+			res.host = hit.host;
+			res.port = hit.port;
+			res.source = hit.source;
+			res.configured = true;
+			break;
+		}
+	}
+	return res;
+}
+
 /* ============================================================
- * dashboard info（采用上游新版 has_ui / configured 逻辑）
+ * 4. 控制面板业务逻辑 (下载 / 状态 / 切换)
  * ============================================================ */
 
 function get_dashboard_info(req) {
@@ -441,46 +499,6 @@ function get_dashboard_info(req) {
 	return res;
 }
 
-/* ============================================================
- * 连接地址探测（保留你的定制）
- * ============================================================ */
-
-function find_listen_in_file(path) {
-	let content = readfile(path) || "";
-	let clean = strip_dae_comments(content);
-	let parsed_native = parse_native_api(clean);
-	if (parsed_native && parsed_native.listen) {
-		return { listen: parsed_native.listen, host: parsed_native.host, port: parsed_native.port, source: path };
-	}
-	let clash = parse_clash_api(clean);
-	if (clash && clash.listen) {
-		return { listen: clash.listen, host: clash.host, port: clash.port, source: path };
-	}
-	return null;
-}
-
-function get_connection(req) {
-	let res = { configured: false, listen: "", host: "", port: "", source: "" };
-
-	let files = [ get_config_file_path(), get_api_file_path() ];
-	for (let idx, f in files) {
-		let hit = find_listen_in_file(f);
-		if (hit) {
-			res.listen = hit.listen;
-			res.host = hit.host;
-			res.port = hit.port;
-			res.source = hit.source;
-			res.configured = true;
-			break;
-		}
-	}
-	return res;
-}
-
-/* ============================================================
- * dashboard 下载（采用上游新版 + 安全校验）
- * ============================================================ */
-
 function download_dashboard(req) {
 	let requested_type = (req && req.args) ? req.args.type : null;
 	if (!is_valid_dashboard_type(requested_type)) {
@@ -526,11 +544,9 @@ function download_dashboard(req) {
 	return { success: true, target_dir: target_dir, url: url, queued: true };
 }
 
-/* ============================================================
- * 切换 dashboard（采用上游新版 pending_download）
- * ============================================================ */
-
 function switch_dashboard_api(target_type) {
+	cached_pid = null;
+
 	if (!is_valid_dashboard_type(target_type))
 		return { success: false, message: "Invalid dashboard type" };
 
@@ -571,12 +587,12 @@ function switch_dashboard_api(target_type) {
 	let s = stat(index_path);
 	let has_target_ui = (s && s.type == "file") ? true : false;
 
-	// 目标 UI 文件不存在：不改写 api.dae、不重启，返回 pending_download
+	// 若面板静态资源尚未下载，避免重写 api.dae 导致崩溃，返回 pending 状态
 	if (!has_target_ui && !api_cfg.is_legacy && parsed_native && parsed_native.enabled && parsed_native.listen) {
 		return { success: true, type: target_type, has_ui: false, pending_download: true };
 	}
 
-	// 已经正确配置
+	// 若配置已一致，直接返回
 	if (!api_cfg.is_legacy && parsed_native && parsed_native.enabled &&
 	    parsed_native.listen &&
 	    parsed_native.config_write &&
@@ -588,7 +604,6 @@ function switch_dashboard_api(target_type) {
 	let api_content = readfile(api_file) || "";
 	let sec = (parsed_native && parsed_native.secret && length(parsed_native.secret) >= 8) ? parsed_native.secret : DEFAULT_SECRET;
 	let listen = (parsed_native && parsed_native.listen) ? parsed_native.listen : (DEFAULT_HOST + ":" + DEFAULT_PORT);
-
 
 	if (!parsed_native) {
 		let clean = strip_dae_comments(api_content);
@@ -639,12 +654,12 @@ ui_line +
 }
 
 /* ============================================================
- * RPC 导出
+ * 5. RPC 接口导出 (luci.honk)
  * ============================================================ */
 
 return {
 	"luci.honk": {
-		// 定制：完整 status（含 version/threads/uptime/cpu/autostart）
+		// [定制扩展] 完整状态探针
 		status: {
 			call: function(req) {
 				let pid = get_honk_pid();
@@ -654,6 +669,7 @@ return {
 				let threads = null;
 				let uptime = "";
 				let cpu = null;
+
 				if (running) {
 					version = get_honk_version();
 					let status_str = readfile("/proc/" + pid + "/status");
@@ -671,6 +687,7 @@ return {
 					let up = get_system_uptime();
 					cpu = get_cpu_usage(pid, st, up);
 				}
+
 				return {
 					running: running,
 					memory: memory,
@@ -683,7 +700,7 @@ return {
 			}
 		},
 
-		// 定制：服务控制
+		// [定制扩展] 服务控制 (安全白名单，耗时操作异步化防超时)
 		service_action: {
 			args: { action: "string" },
 			call: function(req) {
@@ -698,12 +715,24 @@ return {
 				let cmd = SERVICE_ACTIONS[act];
 				if (!cmd)
 					return { success: false, message: "Invalid action" };
-				let rc = system(cmd + " >/dev/null 2>&1");
-				return { success: rc == 0, action: act, autostart: get_autostart() };
+
+				cached_pid = null;
+
+				if (act == "enable" || act == "disable") {
+					let rc = system(cmd + " >/dev/null 2>&1");
+					return { success: rc == 0, action: act, autostart: get_autostart() };
+				}
+
+				// start / stop / restart 放入后台，防止阻塞 ubus / rpcd 线程
+				let rc = system(cmd + " >/dev/null 2>&1 &");
+				if (rc != 0)
+					return { success: false, message: "failed to dispatch " + act };
+
+				return { success: true, action: act, queued: true, autostart: get_autostart() };
 			}
 		},
 
-		// 定制：连接地址
+		// [定制扩展] 连接配置探针
 		get_connection: {
 			call: function(req) {
 				return get_connection(req);
@@ -712,18 +741,22 @@ return {
 
 		reload: {
 			call: function(req) {
+				cached_pid = null;
 				let rc = system("/etc/init.d/honk hot_reload >/dev/null 2>&1 &");
 				if (rc != 0)
 					return { success: false, message: "failed to dispatch hot_reload" };
+
 				return { success: true, queued: true };
 			}
 		},
 
 		restart: {
 			call: function(req) {
+				cached_pid = null;
 				let rc = system("/etc/init.d/honk restart >/dev/null 2>&1 &");
 				if (rc != 0)
 					return { success: false, message: "failed to dispatch restart" };
+
 				return { success: true, queued: true };
 			}
 		},
