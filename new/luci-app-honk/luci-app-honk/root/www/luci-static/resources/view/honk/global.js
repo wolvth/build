@@ -90,9 +90,6 @@ return view.extend({
 				if (!resp || resp.success === false)
 					throw new Error((resp && resp.message) || _('Service did not accept the request'));
 
-				if (!honk.isServiceEnabled())
-					return;
-
 				return honk.waitForHonkState(true).then(function(st) {
 					if (st.running === false)
 						throw new Error(_('HONK did not come back up; check the logs'));
