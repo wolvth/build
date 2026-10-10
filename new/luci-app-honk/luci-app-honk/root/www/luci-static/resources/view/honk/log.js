@@ -1,18 +1,22 @@
 'use strict';
 'require view';
 'require ui';
+'require uci';
 'require poll';
 'require honk.common as honk';
 
 return view.extend({
+	load: function() {
+		return uci.load('honk');
+	},
+
 	handleSaveApply: null,
 	handleSave: null,
 	handleReset: null,
 
 	render: function() {
-		var applyTabs = (honk && (honk.applyTabVisibility || honk.applyAdvancedTabVisibility));
-		if (applyTabs) {
-			applyTabs();
+		if (honk && honk.applyTabVisibility) {
+			honk.applyTabVisibility();
 		}
 
 		var scrolled = false;
@@ -47,8 +51,9 @@ return view.extend({
 		function updateLog() {
 			return honk.callHonkGetLog().then(function(data) {
 				var content = (data && data.log) ? data.log : '';
+				var atBottom = !scrolled || (logTextarea.scrollHeight - logTextarea.scrollTop - logTextarea.clientHeight < 50);
 				logTextarea.value = content;
-				if (!scrolled && content) {
+				if (atBottom && content) {
 					logTextarea.scrollTop = logTextarea.scrollHeight;
 					scrolled = true;
 				}
@@ -57,9 +62,35 @@ return view.extend({
 
 		updateLog();
 
-		poll.add(function() {
-			return updateLog();
-		}, 3);
+		var onVisibilityChange;
+
+		var logPollFn = function() {
+			if (!document.body.contains(logTextarea)) {
+				poll.remove(logPollFn);
+				if (onVisibilityChange) {
+					document.removeEventListener('visibilitychange', onVisibilityChange);
+				}
+				return Promise.resolve();
+			}
+			if (document.hidden) {
+				return Promise.resolve();
+			}
+			return updateLog().catch(function() { });
+		};
+
+		poll.add(logPollFn, 3);
+
+		onVisibilityChange = function() {
+			if (!document.body.contains(logTextarea)) {
+				document.removeEventListener('visibilitychange', onVisibilityChange);
+				return;
+			}
+			if (!document.hidden) {
+				updateLog();
+			}
+		};
+
+		document.addEventListener('visibilitychange', onVisibilityChange);
 
 		return E('fieldset', { 'class': 'cbi-section', 'id': '_log_fieldset' }, [
 			E('legend', {}, _('Logs')),
@@ -68,4 +99,3 @@ return view.extend({
 		]);
 	}
 });
-
