@@ -268,8 +268,6 @@ function parse_native_api(clean_content) {
 	let sec_m = match(block, /secret\s*:\s*['"]?([^'" \t\r\n]*)['"]?/);
 	let en_m = match(block, /enabled\s*:\s*['"]?(true|false)['"]?/);
 	let cw_m = match(block, /config_write\s*:\s*['"]?(true|false)['"]?/);
-	let geosite_m = match(block, /geosite_download_url\s*:\s*['"]?([^'" \t\r\n]+)['"]?/);
-	let geoip_m = match(block, /geoip_download_url\s*:\s*['"]?([^'" \t\r\n]+)['"]?/);
 
 	let res = {
 		enabled: en_m ? (en_m[1] == "true") : true,
@@ -277,8 +275,6 @@ function parse_native_api(clean_content) {
 		listen: listen_m ? listen_m[1] : "",
 		ui: ui_m ? ui_m[1] : "",
 		secret: sec_m ? sec_m[1] : "",
-		geosite_download_url: geosite_m ? geosite_m[1] : "",
-		geoip_download_url: geoip_m ? geoip_m[1] : "",
 		host: "",
 		port: ""
 	};
