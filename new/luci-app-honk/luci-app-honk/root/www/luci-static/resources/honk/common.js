@@ -116,8 +116,8 @@ var callUciGet = rpc.declare({
 function isServiceEnabled() {
 	var sections = uci.sections('honk', 'honk') || [];
 	var s = sections[0] || {};
-	// 兼容旧配置：没有 enabled 字段时视为已启用
-	return (s.enabled === undefined || s.enabled === '1');
+	// enabled 字段已废弃；未设置时视为已启用，仅显式 '0' 才视为禁用
+	return (s.enabled === undefined || s.enabled === '' || s.enabled === '1');
 }
 
 function waitForHonkState(wantRunning, attempts) {
