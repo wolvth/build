@@ -700,26 +700,11 @@ function createConfigFileView(filePath, mapTitle, mapDesc, fieldTitle, successMs
 
 
 // Tab visibility control:
-// - api is hidden when dashboard=none
+// 已取消按 dashboard 类型隐藏标签，所有标签常态显示
 function applyTabVisibility() {
-	return L.resolveDefault(callUciGet('honk', 'config', 'dashboard'), 'none').then(function(dashType) {
-		var hiddenTabs = [];
-		if ((dashType || 'none') === 'none') {
-			hiddenTabs.push('api');
-		}
-
-		applyTabCss(hiddenTabs);
-
-		var currentTab = (window.L && L.env && Array.isArray(L.env.dispatchpath)) ? L.env.dispatchpath[3] : '';
-		if (!currentTab) {
-			var m = window.location.pathname.match(/\/honk\/([a-z0-9_-]+)/);
-			if (m) currentTab = m[1];
-		}
-		if (currentTab && hiddenTabs.indexOf(currentTab) !== -1) {
-			window.location.href = L.url('admin/services/honk/global');
-		}
-	}).catch(function() {
-	});
+	// 不再隐藏任何标签
+	applyTabCss([]);
+	return Promise.resolve();
 }
 
 var applyAdvancedTabVisibility = applyTabVisibility;
