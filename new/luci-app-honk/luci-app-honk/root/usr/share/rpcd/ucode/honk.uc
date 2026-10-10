@@ -5,6 +5,10 @@
 import { readfile, writefile, popen, stat } from 'fs';
 import { cursor } from 'uci';
 
+const DEFAULT_HOST = "0.0.0.0";
+const DEFAULT_PORT = "9527";
+const DEFAULT_SECRET = "honk114514";
+
 const DASHBOARD_DIRS = {
 	zashboard: "/etc/honk/zashboard",
 	doona: "/etc/honk/doona"
@@ -14,45 +18,35 @@ function get_dashboard_dir(type) {
 	return DASHBOARD_DIRS[type] || DASHBOARD_DIRS.doona;
 }
 
+function is_valid_dashboard_type(type) {
+	if (type == "none")
+		return true;
+
+	for (let known in keys(DASHBOARD_DIRS))
+		if (known == type)
+			return true;
+
+	return false;
+}
+
+function is_safe_ui_dir(path) {
+	if (!path || !match(path, /^\/etc\/honk\/[^\/]+$/))
+		return false;
+
+	let base = substr(path, 10);
+	return base != "." && base != "..";
+}
+
+/* ============================================================
+ * 定制：进程与状态采集（保留你的实现）
+ * ============================================================ */
+
 function get_honk_pid() {
 	let p = popen("pidof honk-core 2>/dev/null");
 	let pids = p ? p.read("all") : "";
 	if (p) p.close();
 	let m = match(pids, /([0-9]+)/);
 	return m ? m[1] : null;
-}
-
-function parse_host_port(addr) {
-	let res = { host: "", port: "" };
-	if (!addr) return res;
-	let m_v6 = match(addr, /^\[([^\]]+)\]:([0-9]+)$/);
-	let m_v4 = match(addr, /^([^:]+):([0-9]+)$/);
-	let m_p = match(addr, /^:([0-9]+)$/);
-	if (m_v6) {
-		res.host = m_v6[1];
-		res.port = m_v6[2];
-	} else if (m_v4) {
-		res.host = m_v4[1];
-		res.port = m_v4[2];
-	} else if (m_p) {
-		res.host = "0.0.0.0";
-		res.port = m_p[1];
-	} else if (match(addr, /^[0-9]+$/)) {
-		res.host = "0.0.0.0";
-		res.port = addr;
-	}
-	return res;
-}
-
-function parse_clash_api(clean_content) {
-	let api_m = match(clean_content, /clash_api\s*\{([^}]+)\}/);
-	if (!api_m) return null;
-	let block = api_m[1];
-	let ec_m = match(block, /external_controller\s*:\s*['"]?([^'" \t\r\n]+)['"]?/);
-	if (!ec_m) return null;
-	let listen = ec_m[1];
-	let hp = parse_host_port(listen);
-	return { listen: listen, host: hp.host, port: hp.port };
 }
 
 function get_autostart() {
@@ -76,12 +70,9 @@ function get_clk_tck() {
 
 function read_proc_stat(pid) {
 	let content = readfile("/proc/" + pid + "/stat") || "";
-	// comm (field 2) may contain spaces/parens; parse after the last ')'
 	let rp = match(content, /\)\s+(.*)$/);
 	if (!rp) return null;
 	let f = split(trim(rp[1]), /\s+/);
-	// after comm: state(3) is f[0], so utime(14)=f[11], stime(15)=f[12],
-	// num_threads(20)=f[17], starttime(22)=f[19]
 	return {
 		utime: (+f[11]) || 0,
 		stime: (+f[12]) || 0,
@@ -107,12 +98,10 @@ function get_proc_uptime(pid, st) {
 	if (!st) return "";
 	let up = get_system_uptime();
 	if (up <= 0) return "";
-	// NOTE: ucode `/` on two ints is integer division; force float via * 1.0
 	return format_uptime(up - st.starttime * 1.0 / get_clk_tck());
 }
 
 function get_cpu_usage(pid, st, up) {
-	// instantaneous CPU between two polls; state kept in a cache file
 	if (!st) return null;
 	let total = st.utime + st.stime;
 	let cache_file = "/tmp/honk.cpu.cache";
@@ -120,15 +109,12 @@ function get_cpu_usage(pid, st, up) {
 	writefile(cache_file, sprintf("%s %.2f %d", pid, up, total));
 	if (!m || +m[1] != +pid) return null;
 	let dt_wall = up - (+m[2]);
-	// NOTE: ucode `/` on two ints is integer division (e.g. 30/100 == 0),
-	// which made CPU always show 0.0%; force float via * 1.0
 	let dt_cpu = (total - (+m[3])) * 1.0 / get_clk_tck();
 	if (dt_wall < 0.5 || dt_cpu < 0) return null;
 	return sprintf("%.1f%%", dt_cpu / dt_wall * 100);
 }
 
 function get_honk_version() {
-	// honk-core -v first line, cached
 	let cache = trim(readfile("/tmp/honk.version.cache") || "");
 	if (cache != "") return cache;
 	let p = popen("honk-core -v 2>/dev/null | head -n 1");
@@ -138,6 +124,10 @@ function get_honk_version() {
 	writefile("/tmp/honk.version.cache", out);
 	return out;
 }
+
+/* ============================================================
+ * 通用：dae 注释剥离 & 括号块解析（采用上游新版）
+ * ============================================================ */
 
 function strip_dae_comments(content) {
 	if (!content) return "";
@@ -174,10 +164,104 @@ function strip_dae_comments(content) {
 	return join("\n", clean_lines);
 }
 
+function find_bracket_block(content, header_regex) {
+	let lines = split(content, "\n");
+	let start_idx = -1;
+	let end_idx = -1;
+	let in_block = false;
+	let depth = 0;
+	let in_single = false;
+	let in_double = false;
+
+	for (let idx, line in lines) {
+		let trimmed = trim(line);
+		if (!in_block && match(trimmed, header_regex)) {
+			in_block = true;
+			start_idx = idx;
+		}
+
+		if (in_block) {
+			let len = length(line);
+			for (let i = 0; i < len; i++) {
+				let c = substr(line, i, 1);
+				let next_c = (i + 1 < len) ? substr(line, i + 1, 1) : "";
+				if (c == "'" && !in_double) {
+					in_single = !in_single;
+				} else if (c == '"' && !in_single) {
+					in_double = !in_double;
+				} else if (!in_single && !in_double) {
+					if (c == '#' || (c == '/' && next_c == '/')) {
+						break;
+					} else if (c == '{') {
+						depth++;
+					} else if (c == '}') {
+						depth--;
+						if (depth <= 0) {
+							end_idx = idx;
+							break;
+						}
+					}
+				}
+			}
+			if (end_idx != -1) break;
+		}
+	}
+	return { start: start_idx, end: end_idx };
+}
+
+function extract_bracket_block(content, header_regex) {
+	let bounds = find_bracket_block(content, header_regex);
+	if (bounds.start == -1 || bounds.end == -1) return null;
+	let lines = split(content, "\n");
+	let block_lines = [];
+	for (let i = bounds.start; i <= bounds.end; i++) {
+		push(block_lines, lines[i]);
+	}
+	return join("\n", block_lines);
+}
+
+function remove_bracket_block(content, header_regex) {
+	let bounds = find_bracket_block(content, header_regex);
+	if (bounds.start == -1 || bounds.end == -1) return content;
+	let lines = split(content, "\n");
+	let new_lines = [];
+	for (let i = 0; i < length(lines); i++) {
+		if (i < bounds.start || i > bounds.end) {
+			push(new_lines, lines[i]);
+		}
+	}
+	return join("\n", new_lines);
+}
+
+/* ============================================================
+ * native_api / clash_api 解析（保留你的扩展字段）
+ * ============================================================ */
+
+function parse_host_port(addr) {
+	let res = { host: "", port: "" };
+	if (!addr) return res;
+	let m_v6 = match(addr, /^\[([^\]]+)\]:([0-9]+)$/);
+	let m_v4 = match(addr, /^([^:]+):([0-9]+)$/);
+	let m_p = match(addr, /^:([0-9]+)$/);
+	if (m_v6) {
+		res.host = m_v6[1];
+		res.port = m_v6[2];
+	} else if (m_v4) {
+		res.host = m_v4[1];
+		res.port = m_v4[2];
+	} else if (m_p) {
+		res.host = "0.0.0.0";
+		res.port = m_p[1];
+	} else if (match(addr, /^[0-9]+$/)) {
+		res.host = "0.0.0.0";
+		res.port = addr;
+	}
+	return res;
+}
+
 function parse_native_api(clean_content) {
-	let api_m = match(clean_content, /native_api\s*\{([^}]+)\}/);
-	if (!api_m) return null;
-	let block = api_m[1];
+	let block = extract_bracket_block(clean_content, /native_api\s*\{/);
+	if (!block) return null;
 
 	let listen_m = match(block, /listen\s*:\s*['"]?([^'" \t\r\n]+)['"]?/);
 	let ui_m = match(block, /ui\s*:\s*['"]?([^'" \t\r\n]+)['"]?/);
@@ -205,6 +289,20 @@ function parse_native_api(clean_content) {
 
 	return res;
 }
+
+function parse_clash_api(clean_content) {
+	let block = extract_bracket_block(clean_content, /clash_api\s*\{/);
+	if (!block) return null;
+	let ec_m = match(block, /external_controller\s*:\s*['"]?([^'" \t\r\n]+)['"]?/);
+	if (!ec_m) return null;
+	let listen = ec_m[1];
+	let hp = parse_host_port(listen);
+	return { listen: listen, host: hp.host, port: hp.port };
+}
+
+/* ============================================================
+ * 配置文件路径 / api 配置读取（采用上游新版）
+ * ============================================================ */
 
 function get_config_file_path() {
 	let u = cursor();
@@ -234,8 +332,6 @@ function get_api_config() {
 		if (leg_native) {
 			return {
 				file: config_file,
-				content: legacy_content,
-				clean: legacy_clean,
 				parsed_native: leg_native,
 				is_legacy: true
 			};
@@ -244,49 +340,40 @@ function get_api_config() {
 
 	return {
 		file: api_file,
-		content: content,
-		clean: clean,
 		parsed_native: parsed_native,
 		is_legacy: false
 	};
 }
 
-function remove_bracket_block(content, header_regex) {
-	let lines = split(content, "\n");
-	let new_lines = [];
-	let in_block = false;
-	let depth = 0;
-
-	for (let idx, line in lines) {
-		let trimmed = trim(line);
-		if (!in_block && match(trimmed, header_regex)) {
-			in_block = true;
-			depth = 1;
-			continue;
-		}
-
-		if (in_block) {
-			if (match(trimmed, /\{/)) depth++;
-			if (match(trimmed, /\}/)) depth--;
-			if (depth <= 0) {
-				in_block = false;
+function get_uci_dashboard_type(u) {
+	if (!u) return null;
+	u.load("honk");
+	let requested_type = u.get("honk", "config", "dashboard");
+	if (!requested_type) {
+		u.foreach("honk", "honk", function(s) {
+			if (s.dashboard) {
+				requested_type = s.dashboard;
+				return false;
 			}
-			continue;
-		}
-
-		push(new_lines, line);
+		});
 	}
-	return join("\n", new_lines);
+	return requested_type;
 }
 
 function clean_legacy_api_from_config(config_file) {
+	if (!match(config_file, /^\/etc\/honk\//) || match(config_file, /\.\./))
+		return;
+
 	let main_content = readfile(config_file);
 	if (!main_content) return;
 	let cleaned_main = remove_bracket_block(main_content, /^[#\/]*\s*clash_api\s*\{/);
 	cleaned_main = remove_bracket_block(cleaned_main, /^[#\/]*\s*native_api\s*\{/);
-	let exp_m = match(cleaned_main, /experimental\s*\{([^}]+)\}/);
-	if (exp_m) {
-		let inner_clean = strip_dae_comments(exp_m[1]);
+
+	let exp_block = extract_bracket_block(cleaned_main, /experimental\s*\{/);
+	if (exp_block) {
+		let inner_clean = strip_dae_comments(exp_block);
+		inner_clean = replace(inner_clean, /experimental\s*\{/, "");
+		inner_clean = replace(inner_clean, /\}[ \t\r\n]*$/, "");
 		if (!match(inner_clean, /\S/)) {
 			cleaned_main = remove_bracket_block(cleaned_main, /^[#\/]*\s*experimental\s*\{/);
 		}
@@ -297,19 +384,17 @@ function clean_legacy_api_from_config(config_file) {
 	}
 }
 
+/* ============================================================
+ * dashboard info（采用上游新版 has_ui / configured 逻辑）
+ * ============================================================ */
+
 function get_dashboard_info(req) {
 	let u = cursor();
 	let requested_type = (req && req.args) ? req.args.type : null;
-	if (!requested_type && u) {
-		u.load("honk");
-		requested_type = u.get("honk", "config", "dashboard");
-		if (!requested_type) {
-			u.foreach("honk", "honk", function(s) {
-				if (s.dashboard) requested_type = s.dashboard;
-			});
-		}
+	if (!is_valid_dashboard_type(requested_type) && u) {
+		requested_type = get_uci_dashboard_type(u);
 	}
-	if (!requested_type) requested_type = "none";
+	if (!is_valid_dashboard_type(requested_type)) requested_type = "none";
 
 	let api_cfg = get_api_config();
 	let parsed_native = api_cfg.parsed_native;
@@ -325,10 +410,7 @@ function get_dashboard_info(req) {
 		host: "",
 		port: "",
 		secret: "",
-		external_ui: "",
-		geosite_download_url: "",
-		geoip_download_url: "",
-		default_mode: "Rule"
+		external_ui: ""
 	};
 
 	if (requested_type == "none") {
@@ -339,32 +421,33 @@ function get_dashboard_info(req) {
 	let other_type = (requested_type == "zashboard") ? "doona" : "zashboard";
 	let other_default_ui = get_dashboard_dir(other_type);
 
-	if (parsed_native && parsed_native.enabled) {
+	if (parsed_native && parsed_native.enabled && parsed_native.listen) {
 		res.external_controller = parsed_native.listen;
 		res.host = parsed_native.host;
-		res.port = parsed_native.port || "9527";
+		res.port = parsed_native.port || DEFAULT_PORT;
 		res.secret = parsed_native.secret;
-		res.geosite_download_url = parsed_native.geosite_download_url;
-		res.geoip_download_url = parsed_native.geoip_download_url;
+
 		res.external_ui = (parsed_native.ui && parsed_native.ui != other_default_ui) ? parsed_native.ui : target_default_ui;
 
-		if (parsed_native.listen && parsed_native.ui && parsed_native.ui != other_default_ui) {
+		let index_path = res.external_ui + "/index.html";
+		let s = stat(index_path);
+		res.has_ui = (s && s.type == "file") ? true : false;
+
+		if (!res.has_ui) {
+			res.configured = true;
+		} else if (parsed_native.ui && parsed_native.ui != other_default_ui) {
 			res.configured = true;
 		} else {
 			res.configured = false;
 		}
 	}
 
-	if (res.external_ui) {
-		let index_path = res.external_ui + "/index.html";
-		let s = stat(index_path);
-		if (s && s.type == "file") {
-			res.has_ui = true;
-		}
-	}
-
 	return res;
 }
+
+/* ============================================================
+ * 连接地址探测（保留你的定制）
+ * ============================================================ */
 
 function find_listen_in_file(path) {
 	let content = readfile(path) || "";
@@ -383,8 +466,6 @@ function find_listen_in_file(path) {
 function get_connection(req) {
 	let res = { configured: false, listen: "", host: "", port: "", source: "" };
 
-	// 连接地址收集范围：主配置 config.dae 与分页配置 config.d/api.dae
-	// （api.dae 与 dns.dae 等同在 /etc/honk/config.d/ 下）
 	let files = [ get_config_file_path(), get_api_file_path() ];
 	for (let idx, f in files) {
 		let hit = find_listen_in_file(f);
@@ -400,26 +481,21 @@ function get_connection(req) {
 	return res;
 }
 
+/* ============================================================
+ * dashboard 下载（采用上游新版 + 安全校验）
+ * ============================================================ */
+
 function download_dashboard(req) {
 	let requested_type = (req && req.args) ? req.args.type : null;
-	if (!requested_type) {
-		let u = cursor();
-		if (u) {
-			u.load("honk");
-			requested_type = u.get("honk", "config", "dashboard");
-			if (!requested_type) {
-				u.foreach("honk", "honk", function(s) {
-					if (s.dashboard) requested_type = s.dashboard;
-				});
-			}
-		}
+	if (!is_valid_dashboard_type(requested_type)) {
+		requested_type = get_uci_dashboard_type(cursor());
 	}
-	if (!requested_type || requested_type == "none") {
+	if (!is_valid_dashboard_type(requested_type) || requested_type == "none") {
 		requested_type = "doona";
 	}
 
 	let url = (req && req.args && req.args.url) ? req.args.url : "";
-	if (url != "" && (!match(url, /^https?:\/\//) || match(url, /[ \t\r\n'"`]/))) {
+	if (!match(url, /^https?:\/\//) || match(url, /[ \t\r\n'"`]/)) {
 		return { success: false, message: "Invalid URL" };
 	}
 
@@ -427,10 +503,14 @@ function download_dashboard(req) {
 	let parsed_native = api_cfg.parsed_native;
 	let other_type = (requested_type == "zashboard") ? "doona" : "zashboard";
 	let other_default_ui = get_dashboard_dir(other_type);
-	let target_dir = get_dashboard_dir(requested_type) || "/etc/honk/doona";
-	if (parsed_native && parsed_native.ui && parsed_native.ui != other_default_ui) {
+	let target_dir = get_dashboard_dir(requested_type);
+	if (parsed_native && parsed_native.ui && parsed_native.ui != other_default_ui &&
+	    is_safe_ui_dir(parsed_native.ui)) {
 		target_dir = parsed_native.ui;
 	}
+
+	if (!is_safe_ui_dir(target_dir))
+		return { success: false, message: "Refusing to deploy to an unsafe target directory" };
 
 	let script = "/usr/share/honk/download_dashboard.sh";
 	let s = stat(script);
@@ -443,14 +523,26 @@ function download_dashboard(req) {
 	let safe_url = replace(url, "'", "'\\''");
 
 	let cmd = sprintf("/bin/sh '%s' '%s' '%s' >/dev/null 2>&1 &", safe_script, safe_target, safe_url);
-	system(cmd);
+	let rc = system(cmd);
+	if (rc != 0)
+		return { success: false, message: "failed to dispatch the download task" };
 
-	return { success: true, target_dir: target_dir, url: url };
+	return { success: true, target_dir: target_dir, url: url, queued: true };
 }
 
+/* ============================================================
+ * 切换 dashboard（采用上游新版 pending_download）
+ * ============================================================ */
+
 function switch_dashboard_api(target_type) {
+	if (!is_valid_dashboard_type(target_type))
+		return { success: false, message: "Invalid dashboard type" };
+
 	let api_file = get_api_file_path();
 	let config_file = get_config_file_path();
+
+	let api_cfg = get_api_config();
+	let parsed_native = api_cfg.parsed_native;
 
 	clean_legacy_api_from_config(config_file);
 
@@ -472,72 +564,91 @@ function switch_dashboard_api(target_type) {
 		if (cur && trim(cur) != "") {
 			writefile(api_file, "");
 			system("/etc/init.d/honk restart >/dev/null 2>&1 &");
-			return { success: true, type: "none" };
+			return { success: true, type: "none", queued: true };
 		}
 		writefile(api_file, "");
-		return { success: true, type: "none", noop: true };
+		return { success: true, type: "none" };
 	}
 
-	let api_cfg = get_api_config();
-	let parsed_native = api_cfg.parsed_native;
 	let target_ui = get_dashboard_dir(target_type);
+	let index_path = target_ui + "/index.html";
+	let s = stat(index_path);
+	let has_target_ui = (s && s.type == "file") ? true : false;
 
-	// Check if already correctly configured in api.dae
-	if (!api_cfg.is_legacy) {
-		if (parsed_native && parsed_native.enabled &&
-		    parsed_native.listen &&
-		    parsed_native.config_write &&
-		    parsed_native.geosite_download_url && parsed_native.geoip_download_url &&
-		    parsed_native.ui == target_ui) {
-			return { success: true, type: target_type, noop: true };
-		}
+	// 目标 UI 文件不存在：不改写 api.dae、不重启，返回 pending_download
+	if (!has_target_ui && !api_cfg.is_legacy && parsed_native && parsed_native.enabled && parsed_native.listen) {
+		return { success: true, type: target_type, has_ui: false, pending_download: true };
+	}
+
+	// 已经正确配置
+	if (!api_cfg.is_legacy && parsed_native && parsed_native.enabled &&
+	    parsed_native.listen &&
+	    parsed_native.config_write &&
+	    parsed_native.ui == target_ui &&
+	    has_target_ui) {
+		return { success: true, type: target_type };
 	}
 
 	let api_content = readfile(api_file) || "";
-	let cleaned_api = remove_bracket_block(api_content, /^[#\/]*\s*clash_api\s*\{/);
-	cleaned_api = remove_bracket_block(cleaned_api, /^[#\/]*\s*native_api\s*\{/);
-	cleaned_api = replace(cleaned_api, /experimental\s*\{\s*\}/, "");
+	let sec = (parsed_native && parsed_native.secret && length(parsed_native.secret) >= 8) ? parsed_native.secret : DEFAULT_SECRET;
+	let listen = (parsed_native && parsed_native.listen) ? parsed_native.listen : (DEFAULT_HOST + ":" + DEFAULT_PORT);
 
-	let sec = (parsed_native && parsed_native.secret && length(parsed_native.secret) >= 8) ? parsed_native.secret : "honk114514";
-	let listen = (parsed_native && parsed_native.listen) ? parsed_native.listen : "0.0.0.0:9527";
-	let ui = target_ui;
-	let geosite = (parsed_native && parsed_native.geosite_download_url) ? parsed_native.geosite_download_url : "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geosite.dat";
-	let geoip = (parsed_native && parsed_native.geoip_download_url) ? parsed_native.geoip_download_url : "https://raw.githubusercontent.com/QiuSimons/geoip-moedove/refs/heads/main/geoip.dat";
 
+	if (!parsed_native) {
+		let clean = strip_dae_comments(api_content);
+		let sec_m = match(clean, /secret\s*:\s*['"]?([^'" \t\r\n]*)['"]?/);
+		let listen_m = match(clean, /listen\s*:\s*['"]?([^'" \t\r\n]+)['"]?/);
+		if (sec_m && length(sec_m[1]) >= 8) {
+			sec = sec_m[1];
+		}
+		if (listen_m) {
+			listen = listen_m[1];
+		}
+	}
+
+	let cleaned_api = api_content;
+	for (let iter = 0; iter < 10; iter++) {
+		let before = cleaned_api;
+		cleaned_api = remove_bracket_block(cleaned_api, /^[#\/]*\s*clash_api\s*\{/);
+		cleaned_api = remove_bracket_block(cleaned_api, /^[#\/]*\s*native_api\s*\{/);
+		cleaned_api = remove_bracket_block(cleaned_api, /^[#\/]*\s*experimental\s*\{/);
+		if (cleaned_api == before)
+			break;
+	}
+	cleaned_api = replace(cleaned_api, /[ \t]*experimental\s*\{\s*\}[ \t]*\n?/, "");
+
+	let ui_line = has_target_ui ? ("        ui: '" + target_ui + "'\n") : "";
 	let api_inner =
 "    native_api {\n" +
 "        enabled: true\n" +
 "        listen: '" + listen + "'\n" +
 "        secret: '" + sec + "'\n" +
-"        ui: '" + ui + "'\n" +
+ui_line +
 "        config_write: true\n" +
-"        geosite_download_url: '" + geosite + "'\n" +
-"        geoip_download_url: '" + geoip + "'\n" +
 "    }\n";
 
 	let default_block = "experimental {\n" + api_inner + "}\n";
-	let has_active_exp = match(cleaned_api, /(^|\n)[ \t]*experimental\s*\{/);
+	let base = trim(cleaned_api);
 	let new_api_content;
-	if (has_active_exp) {
-		new_api_content = replace(cleaned_api, /(experimental\s*\{[^\n]*\n?)/, "$1" + api_inner);
+	if (base == "") {
+		new_api_content = "# api.dae\n# Configure API access for HONK dashboards and controllers.\n\n" + default_block;
 	} else {
-		cleaned_api = remove_bracket_block(cleaned_api, /^[#\/]+\s*experimental\s*\{/);
-		let base = trim(cleaned_api);
-		if (base == "") {
-			new_api_content = "# api.dae\n# Configure API access for HONK dashboards and controllers.\n\n" + default_block;
-		} else {
-			new_api_content = base + "\n\n" + default_block;
-		}
+		new_api_content = base + "\n\n" + default_block;
 	}
 
 	writefile(api_file, new_api_content);
 	system("/etc/init.d/honk restart >/dev/null 2>&1 &");
 
-	return { success: true, type: target_type };
+	return { success: true, type: target_type, queued: true };
 }
+
+/* ============================================================
+ * RPC 导出
+ * ============================================================ */
 
 return {
 	"luci.honk": {
+		// 定制：完整 status（含 version/threads/uptime/cpu/autostart）
 		status: {
 			call: function(req) {
 				let pid = get_honk_pid();
@@ -576,6 +687,7 @@ return {
 			}
 		},
 
+		// 定制：服务控制
 		service_action: {
 			args: { action: "string" },
 			call: function(req) {
@@ -595,6 +707,7 @@ return {
 			}
 		},
 
+		// 定制：连接地址
 		get_connection: {
 			call: function(req) {
 				return get_connection(req);
@@ -603,15 +716,19 @@ return {
 
 		reload: {
 			call: function(req) {
-				system("/etc/init.d/honk hot_reload >/dev/null 2>&1 &");
-				return { success: true };
+				let rc = system("/etc/init.d/honk hot_reload >/dev/null 2>&1 &");
+				if (rc != 0)
+					return { success: false, message: "failed to dispatch hot_reload" };
+				return { success: true, queued: true };
 			}
 		},
 
 		restart: {
 			call: function(req) {
-				system("/etc/init.d/honk restart >/dev/null 2>&1 &");
-				return { success: true };
+				let rc = system("/etc/init.d/honk restart >/dev/null 2>&1 &");
+				if (rc != 0)
+					return { success: false, message: "failed to dispatch restart" };
+				return { success: true, queued: true };
 			}
 		},
 
@@ -626,7 +743,8 @@ return {
 
 		clear_log: {
 			call: function(req) {
-				system("true > /var/log/honk/honk.log");
+				system("mkdir -p /var/log/honk");
+				writefile("/var/log/honk/honk.log", "");
 				return { success: true };
 			}
 		},
