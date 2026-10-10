@@ -1,6 +1,7 @@
 'use strict';
 'require baseclass';
 'require rpc';
+'require uci';
 'require fs';
 'require ui';
 'require poll';
@@ -108,6 +109,159 @@ var callUciGet = rpc.declare({
 	expect: { value: '' }
 });
 
+/* ============================================================
+ * 新版上游新增：dashboard 切换 / 下载的可靠封装
+ * ============================================================ */
+
+function isServiceEnabled() {
+	var sections = uci.sections('honk', 'honk') || [];
+	var s = sections[0] || {};
+	// 兼容旧配置：没有 enabled 字段时视为已启用
+	return (s.enabled === undefined || s.enabled === '1');
+}
+
+function waitForHonkState(wantRunning, attempts) {
+	attempts = attempts || 10;
+
+	return new Promise(function(resolve) {
+		var tries = 0;
+
+		function step() {
+			callHonkStatus().then(function(st) {
+				var running = !!(st && st.running);
+
+				if (running === wantRunning || ++tries >= attempts)
+					resolve({ running: running });
+				else
+					setTimeout(step, 1200);
+			}).catch(function() {
+				if (++tries >= attempts)
+					resolve({ running: null });
+				else
+					setTimeout(step, 1200);
+			});
+		}
+
+		step();
+	});
+}
+
+function switchDashboardAndWait(type) {
+	return callHonkSwitchDashboardApi(type).then(function(resp) {
+		if (!resp || resp.success === false)
+			throw new Error((resp && resp.message) || _('Service did not accept the request'));
+
+		if (resp.pending_download)
+			return { pending: true };
+
+		if (!isServiceEnabled())
+			return { pending: false, running: null };
+
+		return waitForHonkState(true).then(function(st) {
+			return { pending: false, running: st.running };
+		});
+	});
+}
+
+var DOWNLOAD_MAX_TICKS = 900;
+var DOWNLOAD_STALE_TICKS = 90;
+var activeDownloadCancel = null;
+
+function triggerDashboardDownload(url, type, logBox, progressWrap, onFinish) {
+	progressWrap.style.display = 'block';
+	logBox.innerText = _('Initializing download task...\n');
+
+	var ticks = 0, stale = 0, lastStatus = '', lastLog = '', pollFn = null;
+
+	if (activeDownloadCancel)
+		activeDownloadCancel();
+
+	function stop() {
+		if (pollFn) {
+			poll.remove(pollFn);
+			pollFn = null;
+		}
+
+		if (activeDownloadCancel === cancel)
+			activeDownloadCancel = null;
+	}
+
+	function cancel() {
+		stop();
+
+		if (onFinish)
+			onFinish(false);
+	}
+
+	activeDownloadCancel = cancel;
+
+	function fail(message) {
+		stop();
+		if (message) {
+			logBox.innerText += message + '\n';
+			logBox.scrollTop = logBox.scrollHeight;
+		}
+		if (onFinish)
+			onFinish(false);
+	}
+
+	callHonkDownloadDashboard(url, type).then(function(resp) {
+		if (!resp || resp.success === false) {
+			fail(_('Failed to trigger download:') + ' ' + (resp ? resp.message : _('Unknown error')));
+			return;
+		}
+
+		pollFn = function() {
+			if (!document.body.contains(progressWrap)) {
+				stop();
+				return Promise.resolve();
+			}
+
+			if (++ticks > DOWNLOAD_MAX_TICKS) {
+				fail(_('Download did not finish in time.'));
+				return Promise.resolve();
+			}
+
+			return callHonkDownloadStatus().then(function(sResp) {
+				if (!sResp)
+					return;
+
+				if (sResp.status !== lastStatus || sResp.log !== lastLog) {
+					lastStatus = sResp.status;
+					lastLog = sResp.log || '';
+					stale = 0;
+				} else {
+					stale++;
+				}
+
+				if (sResp.log) {
+					logBox.innerText = sResp.log;
+					logBox.scrollTop = logBox.scrollHeight;
+				}
+
+				if (sResp.status === 'SUCCESS') {
+					stop();
+					logBox.scrollTop = logBox.scrollHeight;
+					if (onFinish)
+						onFinish(true);
+				} else if (sResp.status === 'FAILED') {
+					fail(null);
+				} else if (stale > DOWNLOAD_STALE_TICKS) {
+					fail(_('Download task stopped reporting progress.'));
+				}
+			}).catch(function() { });
+		};
+
+		poll.add(pollFn, 1);
+	}).catch(function(err) {
+		fail(_('Download error:') + ' ' + (err.message || err));
+	});
+}
+
+/* ============================================================
+ * 你的旧版定制功能（全部保留）
+ * ============================================================ */
+
 function readFile(path) {
 	if (fs.read_direct) {
 		return fs.read_direct(path).catch(function() {
@@ -156,7 +310,6 @@ function ensureEditorStyles() {
 		var root = document.documentElement;
 		var body = document.body;
 
-		// 1) 明确的 dark 标记
 		if (root.classList.contains('dark') ||
 		    body.classList.contains('dark') ||
 		    root.getAttribute('data-theme') === 'dark' ||
@@ -165,7 +318,6 @@ function ensureEditorStyles() {
 		    body.getAttribute('data-bs-theme') === 'dark') {
 			isDark = true;
 		} else {
-			// 2) 用 bootstrap 实际计算出的背景亮度判断
 			var cs = getComputedStyle(body);
 			var bg = cs.backgroundColor;
 			if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') {
@@ -660,8 +812,6 @@ function renderStatusHeader() {
 	setSwitchState(autostartSwitch, false);
 
 	function updateStatus(data) {
-		// use the element reference directly (map may not be attached to
-		// the document yet on the very first refresh)
 		var tb = statusEl;
 		if (tb) {
 			if (data && data.running) {
@@ -777,28 +927,45 @@ function renderStatusHeader() {
 
 
 return baseclass.extend({
+	// === tab 可见性 ===
 	applyTabVisibility: applyTabVisibility,
 	applyAdvancedTabVisibility: applyTabVisibility,
+
+	// === 服务状态 / 操作 ===
 	callHonkStatus: callHonkStatus,
 	callHonkReload: callHonkReload,
 	callHonkRestart: callHonkRestart,
 	callHonkServiceAction: callHonkServiceAction,
 	callHonkGetConnection: callHonkGetConnection,
+
+	// === 日志 ===
 	callHonkGetLog: callHonkGetLog,
 	callHonkClearLog: callHonkClearLog,
+
+	// === dashboard ===
 	callHonkDashboardInfo: callHonkDashboardInfo,
 	callHonkDownloadDashboard: callHonkDownloadDashboard,
 	callHonkDownloadStatus: callHonkDownloadStatus,
 	callHonkSwitchDashboardApi: callHonkSwitchDashboardApi,
+	switchDashboardAndWait: switchDashboardAndWait,
+	triggerDashboardDownload: triggerDashboardDownload,
+	waitForHonkState: waitForHonkState,
+	isServiceEnabled: isServiceEnabled,
+
+	// === 编辑器 / 文件 ===
 	readFile: readFile,
 	writeFile: writeFile,
 	ensureCodeMirror: ensureCodeMirror,
 	formatEditor: formatEditor,
 	initCodeMirror: initCodeMirror,
 	bindCodeMirrorToMap: bindCodeMirrorToMap,
+
+	// === 视图组件 ===
 	renderStatusHeader: renderStatusHeader,
 	renderConnectionUrl: renderConnectionUrl,
 	refreshConnectionUrl: refreshConnectionUrl,
 	createConfigFileView: createConfigFileView,
+
+	// === 通用 ===
 	showNotification: showNotification
 });
