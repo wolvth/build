@@ -86,6 +86,9 @@ return view.extend({
 				});
 			}
 
+			// 保留定制版流程：显式 reload + 等待服务就绪。
+			//（上游新版改为仅 ui.changes.apply + 页面刷新后由状态栏轮询；
+			// 但本表单大多直接写 /etc/honk/config.dae 而非 uci，显式 reload 才能保证改动生效。）
 			return honk.callHonkReload().then(function(resp) {
 				if (!resp || resp.success === false)
 					throw new Error((resp && resp.message) || _('Service did not accept the request'));
