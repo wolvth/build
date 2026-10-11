@@ -363,3 +363,6 @@ msgstr "切换面板失败："
 
 msgid "No configuration changes detected."
 msgstr "未检测到配置变更。"
+
+msgid "Global configuration saved and service restarted."
+msgstr "全局配置已保存并重启服务。"
