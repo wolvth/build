@@ -360,3 +360,6 @@ msgstr "当前面板类型为“无”，Web 管理面板和 Native API 监听�
 
 msgid "Failed to switch dashboard:"
 msgstr "切换面板失败："
+
+msgid "No configuration changes detected."
+msgstr "未检测到配置变更。"
