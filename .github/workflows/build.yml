@@ -504,7 +504,12 @@ jobs:
       run: |
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
-    
+
+    - name: Patch xdp-tools to disable gc-sections
+      run: |
+        sed -i '/^PKG_INSTALL:=1$/a PKG_BUILD_FLAGS:=no-gc-sections' \
+        package/network/utils/xdp-tools/Makefile
+            
     - name: Compile OpenWrt
       working-directory: ./openwrt
       id: compile
