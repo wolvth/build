@@ -15,9 +15,13 @@ on:
       cache_toolchain:
         description: 'Enable Toolchain Cache'
         required: false
-        default: 'true'
+        default: true
         type: boolean
-
+      enable_optimize:
+        description: '是否启用磁盘清理优化'
+        type: boolean
+        default: false # 默认不启用！
+        
       upload_release:
         description: '发布到 Release (Upload to Release)'
         required: false
@@ -70,6 +74,8 @@ jobs:
         uname -a
         echo "=== CPU ==="
         lscpu
+        echo "=== Disk ==="
+        df -hT
         echo "=== Memory ==="
         free -h
         echo "=== CPU details (proc) ==="
@@ -77,6 +83,7 @@ jobs:
 
     - name: Optimize Disk Space
       uses: hugoalh/disk-space-optimizer-ghaction@v0.8.1
+      if: ${{ inputs.enable_optimize == true }}
       with:
         operate_sudo: "True"
         general_include: ".+"
