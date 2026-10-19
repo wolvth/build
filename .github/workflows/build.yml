@@ -501,10 +501,11 @@ jobs:
       working-directory: ./openwrt
       run: |
         set -e
-        echo "==================== make diffconfig ===================="
-        make diffconfig > /tmp/config.diff 2>/dev/null || true
-        # 打印到控制台（配置差异通常不长，便于直接查看）
-        cat /tmp/config.diff
+        echo "==================== scripts/diffconfig.sh ===================="
+        # 将差异配置输出到文件并打印到控制台
+        ./scripts/diffconfig.sh > config.diff
+        cat config.diff
+        echo "==================== end diffconfig ====================="
         
     # 1️⃣ 获取设备架构信息 (为 Toolchain 缓存做准备)
     - name: Get Cache Infos
