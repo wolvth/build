@@ -395,8 +395,6 @@ jobs:
           echo "custom.config not found, skipping."
         fi
 
-        # 最终去重生成 auto_packages.txt
-        sort -u auto_packages.txt -o auto_packages.txt || true
         echo "✅ 最终 auto_packages.txt:"
         cat auto_packages.txt
 
@@ -523,21 +521,28 @@ jobs:
       run: |
         make download -j8
 
-    - name: Patch xdp-tools to ignore bpftool
+    - name: Patch xdp-tools (BPFTOOL + gc-sections)
       working-directory: ./openwrt
       run: |
         set -e
         XDP_MAKEFILE=$(find . -path '*/xdp-tools/Makefile' | head -n1)
-        [ -n "$XDP_MAKEFILE" ] || { echo "xdp-tools Makefile not found"; exit 1; }
+        [ -n "$XDP_MAKEFILE" ] || { echo "not found"; exit 1; }
         XDP_REAL=$(realpath "$XDP_MAKEFILE")
-        echo "Found xdp-tools Makefile: $XDP_REAL"
 
-        # 将原有的 BPFTOOL="$(STAGING_DIR_HOST)/usr/sbin/bpftool" 置空
-        sed -i 's|^[[:space:]]*BPFTOOL=.*|BPFTOOL=""|' "$XDP_REAL"
+        # 1. 保留 BPFTOOL="" 的修改（如果已存在则跳过）
+        grep -q 'BPFTOOL=""' "$XDP_REAL" || sed -i 's|^[[:space:]]*BPFTOOL=.*|BPFTOOL=""|' "$XDP_REAL"
 
-        # 验证：应只看到一行 BPFTOOL=""
-        echo "--- Verify BPFTOOL setting ---"
-        grep -n 'BPFTOOL' "$XDP_REAL"
+        # 2. 追加 no-gc-sections
+        if ! grep -q '^PKG_BUILD_FLAGS.*no-gc-sections' "$XDP_REAL"; then
+          if grep -q '^PKG_BUILD_FLAGS' "$XDP_REAL"; then
+            sed -i 's/^PKG_BUILD_FLAGS.*/PKG_BUILD_FLAGS:=no-gc-sections/' "$XDP_REAL"
+          else
+            sed -i '/^PKG_INSTALL:=1$/a PKG_BUILD_FLAGS:=no-gc-sections' "$XDP_REAL"
+          fi
+        fi
+
+        echo "--- Verify ---"
+        grep -n 'BPFTOOL\|PKG_BUILD_FLAGS\|PKG_INSTALL' "$XDP_REAL"
           
     - name: Compile OpenWrt
       working-directory: ./openwrt
