@@ -595,26 +595,50 @@ jobs:
       run: |
         echo -e "$(nproc) thread compile"
         df -hT
-        # 优先多线程，失败自动转单线程调试
-        make -j$(nproc) || make -j1 V=s || {
+
+        LOG=/tmp/build-detailed.log
+        BUILD_OK=0
+
+        # 第一次：并行编译，完整日志直接显示在 Actions 控制台
+        if make -j$(nproc); then
+          BUILD_OK=1
+        else
+          echo "========================================================="
+          echo ">>> Parallel build failed. Re-running with -j1 V=s"
+          echo "    (only to capture detailed error context; not a retry)"
+          echo "========================================================="
+
+          # 第二次：串行 + 详细
+          make -j1 V=s >"$LOG" 2>&1 || true
+
+          echo ">>> Error-related lines:"
+          grep -nE 'Error [0-9]+|error:|failed to build|ERROR:' "$LOG" | tail -n 40 || true
+          echo "---------------------------------------------------------"
+          echo ">>> Last 80 lines of detailed log:"
+          tail -n 80 "$LOG"
+          echo "========================================================="
+        fi
 
         echo "====== [Debug] 查找 uboot-rockchip 产物 ======"
         ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
-        find build_dir/ -name *uboot-rockchip* || true
-        
-        echo "====== [Debug] 查找 staging_dir 里的 u-boot 文件 ======"
-        find staging_dir/ -name *uboot* || true
-        find staging_dir/ -name *u-boot* || true
-        find staging_dir/ -name *r4s* || true
-        find staging_dir/ -name *rockchip* || true
+        find build_dir/ -name '*uboot-rockchip*' || true
 
-        # 必须报错退出，否则 Action 会显示成功
-        exit 1
-        }
+        echo "====== [Debug] 查找 staging_dir 里的 u-boot 文件 ======"
+        find staging_dir/ -name '*uboot*' || true
+        find staging_dir/ -name '*u-boot*' || true
+        find staging_dir/ -name '*r4s*' || true
+        find staging_dir/ -name '*rockchip*' || true
+
+        # 第一次失败就直接退出，第二次只是为了拿日志
+        if [ "$BUILD_OK" -ne 1 ]; then
+          echo "❌ Build failed."
+          exit 1
+        fi
+
         echo "status=success" >> $GITHUB_OUTPUT
         echo "✅ Compilation finished. Cleaning up..."
-        df -hT        
-
+        df -hT
+        
     - name: Organize Files
       id: organize
       if: steps.compile.outputs.status == 'success'
