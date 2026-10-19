@@ -180,7 +180,7 @@ jobs:
         # 清理 Key (虽然 Action 结束会销毁环境，但养成好习惯)
         rm -f ~/.ssh/id_rsa
 
-    - name: Update & Install Feeds
+    - name: diy nanopi-r4s armv8.mk 支持1G版本
       working-directory: ./openwrt
       run: |
         rm -rf package/boot/uboot-rockchip
@@ -213,15 +213,23 @@ jobs:
         
         TARGET_DEVICES += friendlyarm_nanopi-r4s
         EOF
-        
-        cd -
-        
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
 
-    # ------------------------------------------------ 
-    # 处理 Custom
-    - name: Load Custom Configuration & Plugins
+    - name: Update and install feeds
+      working-directory: ./openwrt
+      run: |
+        set -e
+        LOG=/tmp/feeds.log
+
+        echo ">>> feeds update -a"
+        ./scripts/feeds update -a >"$LOG" 2>&1 || { echo "feeds update failed:"; tail -n 100 "$LOG"; exit 1; }
+
+        echo ">>> feeds install -a"
+        ./scripts/feeds install -a >"$LOG" 2>&1 || { echo "feeds install failed:"; tail -n 100 "$LOG"; exit 1; }
+
+        echo ">>> feeds updated and installed successfully"
+        
+    # ==================== 下载与同步插件 ====================
+    - name: Download & Prepare Custom Packages
       run: |
         mkdir -p openwrt/package/custom_repos
 
@@ -278,30 +286,27 @@ jobs:
         echo "  😋 检查package目录下的自定义插件仓库"
         ls -lh openwrt/package/custom_repos
 
-        # 🔴 3. Makefile 路径自动修复
+    # ==================== 步骤 🔴 Makefile 修复路径与生成插件配置 ====================
+    - name: Patch Makefiles & Generate Package Config
+      run: |
+        # 1. Makefile 路径自动修复
         echo "Applying global patches to custom packages..."
-        # 查找所有含 Makefile 的目录 (排除 src 目录)
         find openwrt/package/custom_repos -name Makefile | while read makefile; do
-            # A. 修复 Go 路径 (../../lang/golang -> $(TOPDIR)/feeds/packages/lang/golang)
             if grep -q "\.\./\.\./lang/golang/golang-package.mk" "$makefile"; then
                 echo "Fixing Go path in: $makefile"
                 sed -i 's|\.\./\.\./lang/golang/golang-package.mk|$(TOPDIR)/feeds/packages/lang/golang/golang-package.mk|g' "$makefile"
             fi
-            
-            # B. 修复 Rust 路径 (../../lang/rust -> $(TOPDIR)/feeds/packages/lang/rust)
             if grep -q "\.\./\.\./lang/rust/rust-package.mk" "$makefile"; then
                 echo "Fixing Rust path in: $makefile"
                 sed -i 's|\.\./\.\./lang/rust/rust-package.mk|$(TOPDIR)/feeds/packages/lang/rust/rust-package.mk|g' "$makefile"
-            fi            
-            
-            # C. 修复 LuCI 路径 (../../luci.mk -> $(TOPDIR)/feeds/luci/luci.mk)
+            fi
             if grep -q "\.\./\.\./luci.mk" "$makefile"; then
                 echo "Fixing LuCI path in: $makefile"
                 sed -i 's|\.\./\.\./luci.mk|$(TOPDIR)/feeds/luci/luci.mk|g' "$makefile"
             fi
         done
 
-        # ⬇️ 4. 选中下载的插件 auto_packages
+        # 2. 扫描并生成 auto_packages.txt
         touch auto_packages.txt
         echo "Scanning for packages to select...auto_packages"
         find openwrt/package/custom_repos -name Makefile | while read makefile; do
@@ -311,7 +316,7 @@ jobs:
             is_identified=false
             # 预先提取 PKG_NAME (备用)
             val_pkg_name=$(grep -E "^PKG_NAME:=" "$makefile" | awk -F':=' '{print $2}' | tr -d '[:space:]')
-          
+
             # 🎯 优先处理 define Package/ (准确度最高，因为一源多包)
             objs=$(grep -E "^define Package/[^/]+[[:space:]]*$" "$makefile" | sed -E 's/^define Package\///' | sed -E 's/[[:space:]]*$//')
             
@@ -333,7 +338,6 @@ jobs:
 
             # 📘 如果没找到 define，尝试使用 PKG_NAME
             if [ "$is_identified" == "false" ] && [ -n "$val_pkg_name" ]; then
-                # 排除嵌套变量的情况
                 if [[ "$val_pkg_name" != *"\$("* ]]; then
                     echo "CONFIG_PACKAGE_$val_pkg_name=y" >> auto_packages.txt
                     echo "  💡 [LuCI/Simple] $val_pkg_name (from PKG_NAME)"
@@ -349,19 +353,16 @@ jobs:
                 fi
             fi
         done
-        
-        # 🧹 最终去重
+        # 🧹 去重
         sort -u auto_packages.txt -o auto_packages.txt
-        
-        # 🔴 5. 处理 custom.config (支持 # CONFIG... is not set)
-        CUSTOM_CONFIG_PATH="$GITHUB_WORKSPACE/custom.config"
 
+        # 🔴 处理 custom.config (支持 # CONFIG... is not set)
+        CUSTOM_CONFIG_PATH="$GITHUB_WORKSPACE/custom.config"
         if [ -f "$CUSTOM_CONFIG_PATH" ]; then
           echo "Processing custom.config..."
           while IFS= read -r line || [ -n "$line" ]; do
             # 去除首尾空格
             line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            
             # 跳过空行
             if [[ -z "$line" ]]; then continue; fi
             
@@ -395,81 +396,101 @@ jobs:
         else
           echo "custom.config not found, skipping."
         fi
-        
-        # 📂 6. 处理仓库 files 目录 (目录下内容集成进固件1比1覆盖，同imagebuilder用法)
+
+        # 最终去重生成 auto_packages.txt
+        sort -u auto_packages.txt -o auto_packages.txt || true
+        echo "✅ 最终 auto_packages.txt:"
+        cat auto_packages.txt
+
+    # ==================== 部署 Files 与基础配置 ====================
+    - name: Deploy Files & Load Base Config
+      run: |
+        # 1. 处理仓库 files 目录 (目录下内容集成进固件1比1覆盖，同imagebuilder用法)
         if [ -d "$GITHUB_WORKSPACE/$CUSTOM_FILES_DIR" ]; then
-          echo "🔴加载仓库files目录..."
-          cp -r $GITHUB_WORKSPACE/$CUSTOM_FILES_DIR openwrt/files
+          echo "🔴 加载仓库 files 目录..."
+          mkdir -p openwrt/files
+          cp -r "$GITHUB_WORKSPACE/$CUSTOM_FILES_DIR"/* openwrt/files/
           chmod -R +x openwrt/files/root/sh/* || true
         fi
         
-        # 🧩 7. 加载配置文件 (从仓库config/ 目录)
+        # 2. 加载基础 .config (从仓库config/ 目录)
         if [ -e "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
-            echo "🔴加载仓库配置文件: $CONFIG_FILE"
+            echo "🔴 加载仓库配置文件: $CONFIG_FILE"
             cp "$GITHUB_WORKSPACE/$CONFIG_FILE" openwrt/.config
         else
             echo "::error::Config file $CONFIG_FILE not found!"
             exit 1
         fi
         
-        cd openwrt
         # ✅ 修复 Go 路径
-        sed -i '/CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT/d' .config    
-        # ✅ 选中插件，前面处理custom.config得到auto_packages，先去重再追加
-        sort -u ../auto_packages.txt -o ../auto_packages.txt || true 
-        cat ../auto_packages.txt >> .config
+        sed -i '/CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT/d' openwrt/.config    
+        echo "✅ 前面处理custom.config得到auto_packages 追加到.config"
+        cat auto_packages.txt >> openwrt/.config
 
-        echo "✅ 最终 auto_packages.txt"
-        cat ../auto_packages.txt
-        
-        KERNEL_CONFIG=$(ls target/linux/generic/config-[0-9]*.[0-9]*)
-        
-        echo "CONFIG_NETKIT=y" >> "$KERNEL_CONFIG"
-        echo "CONFIG_IKCONFIG=y" >> "$KERNEL_CONFIG"
-        echo "CONFIG_IKCONFIG_PROC=y" >> "$KERNEL_CONFIG"
+    # ==================== 注入内核特性与 Defconfig ====================
+    - name: Configure Kernel Features & Run Defconfig
+      working-directory: openwrt
+      run: |
+        # 1. 注入通用内核配置 (兼容单版本与多版本内核文件，防止 ambiguous redirect)
+        for kconfig in target/linux/generic/config-[0-9]*.[0-9]*; do
+          if [ -f "$kconfig" ]; then
+            echo "Modifying kernel target: $kconfig"
+            echo "CONFIG_NETKIT=y" >> "$kconfig"
+            echo "CONFIG_IKCONFIG=y" >> "$kconfig"
+            echo "CONFIG_IKCONFIG_PROC=y" >> "$kconfig"
+          fi
+        done
 
-        echo "CONFIG_KERNEL_IKCONFIG=y" >> .config
-        echo "CONFIG_KERNEL_IKCONFIG_PROC=y" >> .config
+        # 2. 注入 OpenWrt 系统级内核标志
+        cat << 'EOF' >> .config
+        CONFIG_KERNEL_IKCONFIG=y
+        CONFIG_KERNEL_IKCONFIG_PROC=y
+        CONFIG_KERNEL_BPF_STREAM_PARSER=y
+        CONFIG_KERNEL_NETKIT=y
+        CONFIG_KERNEL_FTRACE=y
+        CONFIG_KERNEL_KPROBES=y
+        CONFIG_KERNEL_KPROBE_EVENTS=y
+        CONFIG_KERNEL_FUNCTION_TRACER=y
+        CONFIG_KERNEL_DYNAMIC_FTRACE=y
 
-        echo "CONFIG_KERNEL_BPF_STREAM_PARSER=y" >> .config
-        echo "CONFIG_KERNEL_NETKIT=y" >> .config
-        echo "CONFIG_KERNEL_FTRACE=y" >> .config
-        echo "CONFIG_KERNEL_KPROBES=y" >> .config
-        echo "CONFIG_KERNEL_KPROBE_EVENTS=y" >> .config        
-        echo "CONFIG_KERNEL_FUNCTION_TRACER=y" >> .config
-        echo "CONFIG_KERNEL_DYNAMIC_FTRACE=y" >> .config
+        # BPF 核心基础设施
+        CONFIG_KERNEL_BPF=y
+        CONFIG_KERNEL_BPF_SYSCALL=y
+        CONFIG_KERNEL_BPF_JIT=y
+        CONFIG_KERNEL_CGROUP_BPF=y
 
-        # 1. BPF 核心基础设施
-        echo "CONFIG_KERNEL_BPF=y" >> .config
-        echo "CONFIG_KERNEL_BPF_SYSCALL=y" >> .config
-        echo "CONFIG_KERNEL_BPF_JIT=y" >> .config
-        echo "CONFIG_KERNEL_CGROUP_BPF=y" >> .config
-        
-        # 2. 网络分类与流量控制 (TC) BPF 支持
-        echo "CONFIG_KERNEL_NET_CLS_BPF=y" >> .config
-        echo "CONFIG_KERNEL_NET_SCH_INGRESS=y" >> .config
-        echo "CONFIG_KERNEL_NET_CLS_ACT=y" >> .config
-        echo "CONFIG_KERNEL_NET_NS=y" >> .config
-        
-        # 3. Netfilter & Nftables / NFQUEUE 内核级支持
-        echo "CONFIG_KERNEL_NF_TABLES=y" >> .config
-        echo "CONFIG_KERNEL_NF_TABLES_INET=y" >> .config
-        echo "CONFIG_KERNEL_NETFILTER_NETLINK_QUEUE=y" >> .config
-        echo "CONFIG_KERNEL_NFNETLINK_QUEUE=y" >> .config
-        
-        echo "CONFIG_KERNEL_TRACEPOINTS=y" >> .config
-        echo "CONFIG_KERNEL_NET_TRACEPOINTS=y" >> .config
+        # 网络分类与流量控制 (TC) BPF 支持
+        CONFIG_KERNEL_NET_CLS_BPF=y
+        CONFIG_KERNEL_NET_SCH_INGRESS=y
+        CONFIG_KERNEL_NET_CLS_ACT=y
+        CONFIG_KERNEL_NET_NS=y
 
+        # Netfilter & Nftables / NFQUEUE 内核级支持
+        CONFIG_KERNEL_NF_TABLES=y
+        CONFIG_KERNEL_NF_TABLES_INET=y
+        CONFIG_KERNEL_NETFILTER_NETLINK_QUEUE=y
+        CONFIG_KERNEL_NFNETLINK_QUEUE=y
+
+        CONFIG_KERNEL_TRACEPOINTS=y
+        CONFIG_KERNEL_NET_TRACEPOINTS=y
+        EOF
+
+        # 3. 生成最终配置
         echo "🔴 生成最终配置 make defconfig"
         make defconfig
 
-        echo "✅ 验证 $KERNEL_CONFIG"
-        echo "Target kernel config is: $KERNEL_CONFIG"
-        grep "NETKIT" "$KERNEL_CONFIG"
-        grep "IKCONFIG" "$KERNEL_CONFIG"
+        # 4. 验证结果
+        echo "✅ 验证 kernel config 内核配置项"
+        for kconfig in target/linux/generic/config-[0-9]*.[0-9]*; do
+          if [ -f "$kconfig" ]; then
+            echo "--- $kconfig ---"
+            grep -E "NETKIT|IKCONFIG" "$kconfig" || true
+          fi
+        done
+
         echo "✅ 验证 .config"
-        grep "OPTIMIZATION" .config
-        grep "KERNEL_CFLAGS" .config
+        grep "OPTIMIZATION" .config || true
+        grep "KERNEL_CFLAGS" .config || true
         
     # 1️⃣ 获取设备架构信息 (为 Toolchain 缓存做准备)
     - name: Get Cache Infos
