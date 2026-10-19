@@ -525,34 +525,21 @@ jobs:
       run: |
         make download -j8
 
-    - name: Patch xdp-tools to disable gc-sections
+    - name: Patch xdp-tools to ignore bpftool
       working-directory: ./openwrt
       run: |
         set -e
-        # 1. 自动定位 xdp-tools 的 Makefile（不限制 -type f，以兼容 feeds 符号链接）
         XDP_MAKEFILE=$(find . -path '*/xdp-tools/Makefile' | head -n1)
-        if [ -z "$XDP_MAKEFILE" ]; then
-          echo "ERROR: xdp-tools Makefile not found under $(pwd)"
-          echo "Directory layout for debugging:"
-          find . -maxdepth 4 -type d -name xdp-tools
-          exit 1
-        fi
-        echo "Found xdp-tools Makefile: $XDP_MAKEFILE"
-
-        # 2. 解析真实路径，避免 sed -i 把符号链接替换成普通文件
+        [ -n "$XDP_MAKEFILE" ] || { echo "xdp-tools Makefile not found"; exit 1; }
         XDP_REAL=$(realpath "$XDP_MAKEFILE")
-        echo "Resolved real path: $XDP_REAL"
+        echo "Found xdp-tools Makefile: $XDP_REAL"
 
-        # 3. 如果已存在 PKG_BUILD_FLAGS 则替换，否则在 PKG_INSTALL:=1 后插入
-        if grep -q '^PKG_BUILD_FLAGS' "$XDP_REAL"; then
-          sed -i 's/^PKG_BUILD_FLAGS.*/PKG_BUILD_FLAGS:=no-gc-sections/' "$XDP_REAL"
-        else
-          sed -i '/^PKG_INSTALL:=1$/a PKG_BUILD_FLAGS:=no-gc-sections' "$XDP_REAL"
-        fi
+        # 将原有的 BPFTOOL="$(STAGING_DIR_HOST)/usr/sbin/bpftool" 置空
+        sed -i 's|^[[:space:]]*BPFTOOL=.*|BPFTOOL=""|' "$XDP_REAL"
 
-        # 4. 验证修改结果
-        echo "--- Patched lines ---"
-        grep -n 'PKG_BUILD_FLAGS\|PKG_INSTALL\|PKG_BUILD_PARALLEL' "$XDP_REAL"
+        # 验证：应只看到一行 BPFTOOL=""
+        echo "--- Verify BPFTOOL setting ---"
+        grep -n 'BPFTOOL' "$XDP_REAL"
           
     - name: Compile OpenWrt
       working-directory: ./openwrt
