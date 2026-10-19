@@ -578,6 +578,27 @@ jobs:
         grep -q 'BPFTOOL=""' "$XDP_REAL" || { echo "FAIL: BPFTOOL not cleared"; exit 1; }
         echo "OK: patch verified statically"
 
+
+        - name: Fix xdp-tools gc-sections compilation error
+        run: |
+          # 遍历 feeds 或 build_dir 中所有涉及 xdp-tools 的 Makefile，直接将冲突的参数删掉
+          find . -path "*/xdp-tools*/*" -name "Makefile" -o -name "*.mk" | while read file; do
+            if grep -q "xdp-dispatcher.embed.o" "$file" || grep -q "libxdp" "$file"; then
+              echo "Fixing $file"
+              sed -i 's/-Wl,--gc-sections//g' "$file"
+              sed -i 's/--gc-sections//g' "$file"
+            fi
+          done
+          
+          # 另外，由于工具链的默认 LDFLAGS 也会全局带入，可以直接修改 target 编译规则或在编译前把链接参数容错化
+          # 针对 libxdp 报错的特定文件直接暴力替换：
+          find . -name "libxdp" -type d | while read dir; do
+            if [ -f "$dir/Makefile" ]; then
+              sed -i 's/-Wl,--gc-sections//g' "$dir/Makefile"
+              sed -i 's/--gc-sections//g' "$dir/Makefile"
+            fi
+          done
+
     - name: Prepare host tools and toolchain
       working-directory: ./openwrt
       run: |
@@ -589,32 +610,17 @@ jobs:
         make toolchain/install -j$(nproc) >"$LOG" 2>&1 || { echo "toolchain/install failed:"; tail -n 80 "$LOG"; exit 1; }
         echo ">>> host tools and toolchain ready"
 
-    - name: Pre-build xdp-tools only
+    - name: Pre-build xdp-tools (verbose for debugging)
       working-directory: ./openwrt
       run: |
         set -e
         LOG=/tmp/xdp-build.log
+        # 使用 V=s 获取详细日志
         make package/network/utils/xdp-tools/compile V=s >"$LOG" 2>&1 || {
-          echo "xdp-tools pre-build FAILED:"
-          tail -n 120 "$LOG"
+          echo "=== Build failed, last 200 lines of log: ==="
+          tail -n 200 "$LOG"
           exit 1
         }
-        echo ">>> xdp-tools pre-build OK"
-        grep -n 'xdp-dispatcher.embed.o' "$LOG" | tail -n 5 || true
-    - name: Pre-build xdp-tools only (early failure detection)
-      working-directory: ./openwrt
-      run: |
-        set -e
-        LOG=/tmp/xdp-build.log
-        echo ">>> compiling package/network/utils/xdp-tools only"
-        make package/network/utils/xdp-tools/compile V=s >"$LOG" 2>&1 || {
-          echo "xdp-tools pre-build FAILED:"
-          tail -n 120 "$LOG"
-          exit 1
-        }
-        echo ">>> xdp-tools pre-build OK"
-        # 可选：确认 xdp-dispatcher.embed.o 链接命令已不含 --gc-sections
-        grep -n 'xdp-dispatcher.embed.o' "$LOG" | tail -n 5 || true
         
     - name: Compile OpenWrt
       working-directory: ./openwrt
