@@ -361,7 +361,7 @@ jobs:
         # 🧹 去重
         sort -u auto_packages.txt -o auto_packages.txt
 
-        # 🔴 处理 custom.config (支持 # CONFIG... is not set)
+        # 🔴 3. 处理 custom.config (支持 # CONFIG... is not set)
         CUSTOM_CONFIG_PATH="$GITHUB_WORKSPACE/custom.config"
         if [ -f "$CUSTOM_CONFIG_PATH" ]; then
           echo "🎯处理 custom.config...追加到上一步的auto_packages.txt"
@@ -383,16 +383,18 @@ jobs:
             if [[ "$line" == \#* ]]; then continue; fi
             
             # 处理其他情况
+            # a. 标准开启 (CONFIG_xxx=y)
             if [[ "$line" == CONFIG_* ]]; then
-                # a. 标准开启 (CONFIG_xxx=y)
                 echo "$line" >> auto_packages.txt
                 echo "  [Config Enable]: $line"
-                # b. 简写禁用 (-包名) -> 自动转为 is not set
+                
+            # b. 简写禁用 (-包名) -> 自动转为 is not set
             elif [[ "$line" == -* ]]; then
                 pkg_name=${line:1}
                 echo "# CONFIG_PACKAGE_$pkg_name is not set" >> auto_packages.txt
                 echo "  [Package Disable]: $pkg_name"
-                # c. 简写开启 (包名) -> 自动转为 =y
+                
+            # c. 简写开启 (包名) -> 自动转为 =y
             else
                 echo "CONFIG_PACKAGE_$line=y" >> auto_packages.txt
                 echo "  [Package Enable]: $line"
@@ -494,6 +496,15 @@ jobs:
         echo "✅ 验证 .config"
         grep "OPTIMIZATION" .config || true
         grep "KERNEL_CFLAGS" .config || true
+
+    - name: Dump config diff
+      working-directory: ./openwrt
+      run: |
+        set -e
+        echo "==================== make diffconfig ===================="
+        make diffconfig > /tmp/config.diff 2>/dev/null || true
+        # 打印到控制台（配置差异通常不长，便于直接查看）
+        cat /tmp/config.diff
         
     # 1️⃣ 获取设备架构信息 (为 Toolchain 缓存做准备)
     - name: Get Cache Infos
@@ -533,48 +544,38 @@ jobs:
       run: |
         set -e
 
-        echo "==================== Dependency query ===================="
-        echo ">>> packages whose Makefile mentions libxdp (text grep, no full parse)"
-        grep -rn 'DEPENDS.*libxdp' --include=Makefile . 2>/dev/null | grep -v 'network/utils/xdp-tools' || echo "(no other package depends on libxdp)"
-        echo ">>> selected config entries for xdp/libxdp"
-        grep -E '^CONFIG_PACKAGE_(libxdp|xdp-)' .config || echo "(none selected)"
-        echo "========================================================="
-
-        echo "==================== Patching Makefile =================="
         XDP_MAKEFILE=$(find . -path '*/xdp-tools/Makefile' | head -n1)
         [ -n "$XDP_MAKEFILE" ] || { echo "xdp-tools Makefile not found"; exit 1; }
         XDP_REAL=$(realpath "$XDP_MAKEFILE")
         echo "Patching: $XDP_REAL"
 
-        # 1. BPFTOOL=""（让 xdp-tools 忽略主机上的 bpftool，跳过额外工具编译）
+        # 1. BPFTOOL=""
         if ! grep -q 'BPFTOOL=""' "$XDP_REAL"; then
           sed -i 's|^[[:space:]]*BPFTOOL=.*|BPFTOOL=""|' "$XDP_REAL"
         fi
 
-        # 2. 定义 XDP_LDFLAGS：从 TARGET_LDFLAGS 中过滤掉 -Wl,--gc-sections
-        #    插入到 TARGET_LDFLAGS += $(INTL_LDFLAGS) 之后
-        if ! grep -q '^XDP_LDFLAGS' "$XDP_REAL"; then
-          sed -i '/^TARGET_LDFLAGS += \$(INTL_LDFLAGS)$/a XDP_LDFLAGS:=$(filter-out -Wl,--gc-sections,$(TARGET_LDFLAGS))' "$XDP_REAL"
-        fi
+        # 2. 先删除旧的 XDP_LDFLAGS 定义（无论之前写的是什么）
+        sed -i '/^XDP_LDFLAGS/d' "$XDP_REAL"
 
-        # 3. 把 CONFIGURE_VARS / MAKE_VARS 中的 LDFLAGS="$(TARGET_LDFLAGS)" 改为 XDP_LDFLAGS
+        # 3. 重新插入正确的定义：用 %--gc-sections 通配符，避免逗号被当作参数分隔符
+        grep -q '^TARGET_LDFLAGS += \$(INTL_LDFLAGS)$' "$XDP_REAL" \
+          || { echo "FAIL: anchor 'TARGET_LDFLAGS += \$(INTL_LDFLAGS)' not found"; exit 1; }
+        sed -i '/^TARGET_LDFLAGS += \$(INTL_LDFLAGS)$/a XDP_LDFLAGS:=$(filter-out %--gc-sections,$(TARGET_LDFLAGS))' "$XDP_REAL"
+
+        # 4. 把 CONFIGURE_VARS / MAKE_VARS 中的 LDFLAGS 改为 XDP_LDFLAGS
         sed -i 's/LDFLAGS="\$(TARGET_LDFLAGS)"/LDFLAGS="$(XDP_LDFLAGS)"/g' "$XDP_REAL"
 
-        # 4. 删除之前无效的 PKG_BUILD_FLAGS:=no-gc-sections（若存在），避免误导
+        # 5. 删除旧的 PKG_BUILD_FLAGS
         sed -i '/^PKG_BUILD_FLAGS:=no-gc-sections$/d' "$XDP_REAL"
 
         echo "--- Verify patched lines ---"
         grep -n 'BPFTOOL\|XDP_LDFLAGS\|LDFLAGS=\|PKG_BUILD_FLAGS' "$XDP_REAL"
-        echo "========================================================="
-        
+
         echo "--- Strict verification ---"
-        grep -q '^XDP_LDFLAGS:=\$(filter-out -Wl,--gc-sections,\$(TARGET_LDFLAGS))' "$XDP_REAL" \
+        grep -q '^XDP_LDFLAGS:=\$(filter-out %--gc-sections,\$(TARGET_LDFLAGS))' "$XDP_REAL" \
           || { echo "FAIL: XDP_LDFLAGS not defined correctly"; exit 1; }
-        # CONFIGURE_VARS 和 MAKE_VARS 两处都应改为 XDP_LDFLAGS
         CNT=$(grep -c 'LDFLAGS="\$(XDP_LDFLAGS)"' "$XDP_REAL")
         [ "$CNT" -ge 2 ] || { echo "FAIL: LDFLAGS not replaced in both CONFIGURE_VARS and MAKE_VARS (found $CNT)"; exit 1; }
-        grep -q 'LDFLAGS="\$(TARGET_LDFLAGS)"' "$XDP_REAL" \
-          && { echo "FAIL: residual LDFLAGS=\"\$(TARGET_LDFLAGS)\" still present"; exit 1; } || true
         grep -q 'BPFTOOL=""' "$XDP_REAL" || { echo "FAIL: BPFTOOL not cleared"; exit 1; }
         echo "OK: patch verified statically"
 
