@@ -11,7 +11,7 @@ PKG_RELEASE:=2
 
 LUCI_TITLE:=LuCI support for honk
 LUCI_PKGARCH:=all
-LUCI_DEPENDS:=+honk +luci-base +rpcd-mod-ucode
+LUCI_DEPENDS:=+luci-base +rpcd-mod-ucode
 
 include $(TOPDIR)/feeds/luci/luci.mk
 
