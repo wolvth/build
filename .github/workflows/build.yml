@@ -579,8 +579,9 @@ jobs:
         echo "OK: patch verified statically"
 
 
-        - name: Fix xdp-tools gc-sections compilation error
-        run: |
+    - name: Fix xdp-tools gc-sections compilation error
+      working-directory: ./openwrt
+      run: |
           # 遍历 feeds 或 build_dir 中所有涉及 xdp-tools 的 Makefile，直接将冲突的参数删掉
           find . -path "*/xdp-tools*/*" -name "Makefile" -o -name "*.mk" | while read file; do
             if grep -q "xdp-dispatcher.embed.o" "$file" || grep -q "libxdp" "$file"; then
