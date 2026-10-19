@@ -578,17 +578,6 @@ jobs:
         grep -q 'BPFTOOL=""' "$XDP_REAL" || { echo "FAIL: BPFTOOL not cleared"; exit 1; }
         echo "OK: patch verified statically"
 
-    - name: Prepare host tools and toolchain
-      working-directory: ./openwrt
-      run: |
-        set -e
-        LOG=/tmp/tools.log
-        echo ">>> make tools/install"
-        make tools/install -j$(nproc) >"$LOG" 2>&1 || { echo "tools/install failed:"; tail -n 80 "$LOG"; exit 1; }
-        echo ">>> make toolchain/install"
-        make toolchain/install -j$(nproc) >"$LOG" 2>&1 || { echo "toolchain/install failed:"; tail -n 80 "$LOG"; exit 1; }
-        echo ">>> host tools and toolchain ready"
-   
     - name: Compile OpenWrt
       working-directory: ./openwrt
       id: compile
@@ -599,7 +588,6 @@ jobs:
         LOG=/tmp/build-detailed.log
         BUILD_OK=0
 
-        # 第一次：并行编译，完整日志直接显示在 Actions 控制台
         if make -j$(nproc); then
           BUILD_OK=1
         else
@@ -608,9 +596,7 @@ jobs:
           echo "    (only to capture detailed error context; not a retry)"
           echo "========================================================="
 
-          # 第二次：串行 + 详细
           make -j1 V=s >"$LOG" 2>&1 || true
-
           echo ">>> Error-related lines:"
           grep -nE 'Error [0-9]+|error:|failed to build|ERROR:' "$LOG" | tail -n 40 || true
           echo "---------------------------------------------------------"
