@@ -521,18 +521,34 @@ jobs:
       run: |
         make download -j8
 
-    - name: Patch xdp-tools (BPFTOOL + gc-sections)
+    - name: Patch xdp-tools (BPFTOOL + gc-sections) and query deps
       working-directory: ./openwrt
       run: |
         set -e
+
+        echo "==================== Dependency query ===================="
+        echo ">>> packages that depend on libxdp163"
+        make package_whatdepends PACKAGE="libxdp163" 2>&1 | tail -n 40 || true
+        echo ">>> packages that depend on libxdp"
+        make package_whatdepends PACKAGE="libxdp" 2>&1 | tail -n 40 || true
+        echo ">>> packages that depend on xdp-tools"
+        make package_whatdepends PACKAGE="xdp-tools" 2>&1 | tail -n 40 || true
+        echo ">>> selected config entries for xdp/libxdp"
+        grep -E '^CONFIG_PACKAGE_(libxdp|xdp-)' .config || echo "(none selected)"
+        echo "========================================================="
+
+        echo "==================== Patching Makefile =================="
         XDP_MAKEFILE=$(find . -path '*/xdp-tools/Makefile' | head -n1)
-        [ -n "$XDP_MAKEFILE" ] || { echo "not found"; exit 1; }
+        [ -n "$XDP_MAKEFILE" ] || { echo "xdp-tools Makefile not found"; exit 1; }
         XDP_REAL=$(realpath "$XDP_MAKEFILE")
+        echo "Patching: $XDP_REAL"
 
-        # 1. 保留 BPFTOOL="" 的修改（如果已存在则跳过）
-        grep -q 'BPFTOOL=""' "$XDP_REAL" || sed -i 's|^[[:space:]]*BPFTOOL=.*|BPFTOOL=""|' "$XDP_REAL"
+        # 1. BPFTOOL=""
+        if ! grep -q 'BPFTOOL=""' "$XDP_REAL"; then
+          sed -i 's|^[[:space:]]*BPFTOOL=.*|BPFTOOL=""|' "$XDP_REAL"
+        fi
 
-        # 2. 追加 no-gc-sections
+        # 2. PKG_BUILD_FLAGS:=no-gc-sections
         if ! grep -q '^PKG_BUILD_FLAGS.*no-gc-sections' "$XDP_REAL"; then
           if grep -q '^PKG_BUILD_FLAGS' "$XDP_REAL"; then
             sed -i 's/^PKG_BUILD_FLAGS.*/PKG_BUILD_FLAGS:=no-gc-sections/' "$XDP_REAL"
@@ -541,8 +557,9 @@ jobs:
           fi
         fi
 
-        echo "--- Verify ---"
+        echo "--- Verify patched lines ---"
         grep -n 'BPFTOOL\|PKG_BUILD_FLAGS\|PKG_INSTALL' "$XDP_REAL"
+        echo "========================================================="
           
     - name: Compile OpenWrt
       working-directory: ./openwrt
