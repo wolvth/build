@@ -396,16 +396,16 @@ jobs:
           echo "custom.config not found, skipping."
         fi
         
-        # 📂 6. 处理 files 目录 (目录下内容集成进固件1比1覆盖，同imagebuilder用法)
+        # 📂 6. 处理仓库 files 目录 (目录下内容集成进固件1比1覆盖，同imagebuilder用法)
         if [ -d "$GITHUB_WORKSPACE/$CUSTOM_FILES_DIR" ]; then
-          echo "Copying custom files..."
+          echo "🔴加载仓库files目录..."
           cp -r $GITHUB_WORKSPACE/$CUSTOM_FILES_DIR openwrt/files
           chmod -R +x openwrt/files/root/sh/* || true
         fi
         
         # 🧩 7. 加载配置文件 (从仓库config/ 目录)
         if [ -e "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
-            echo "Using config file: $CONFIG_FILE"
+            echo "🔴加载仓库配置文件: $CONFIG_FILE"
             cp "$GITHUB_WORKSPACE/$CONFIG_FILE" openwrt/.config
         else
             echo "::error::Config file $CONFIG_FILE not found!"
@@ -417,13 +417,12 @@ jobs:
         sed -i '/CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT/d' .config    
         # ✅ 选中插件，前面处理custom.config得到auto_packages，先去重再追加
         sort -u ../auto_packages.txt -o ../auto_packages.txt || true 
-        echo "  ⚙️ Auto-selecting custom in .config..."
         cat ../auto_packages.txt >> .config
-        #  打印出来看看选中了啥
+
+        echo "✅ 最终 auto_packages.txt"
         cat ../auto_packages.txt
         
         KERNEL_CONFIG=$(ls target/linux/generic/config-[0-9]*.[0-9]*)
-        echo "Target kernel config is: $KERNEL_CONFIG"
         
         echo "CONFIG_NETKIT=y" >> "$KERNEL_CONFIG"
         echo "CONFIG_IKCONFIG=y" >> "$KERNEL_CONFIG"
@@ -460,11 +459,15 @@ jobs:
         
         echo "CONFIG_KERNEL_TRACEPOINTS=y" >> .config
         echo "CONFIG_KERNEL_NET_TRACEPOINTS=y" >> .config
-        # 🔴 生成最终配置
+
+        echo "🔴 生成最终配置 make defconfig"
         make defconfig
-        
+
+        echo "✅ 验证 $KERNEL_CONFIG"
+        echo "Target kernel config is: $KERNEL_CONFIG"
         grep "NETKIT" "$KERNEL_CONFIG"
         grep "IKCONFIG" "$KERNEL_CONFIG"
+        echo "✅ 验证 .config"
         grep "OPTIMIZATION" .config
         grep "KERNEL_CFLAGS" .config
         
