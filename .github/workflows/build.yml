@@ -578,6 +578,29 @@ jobs:
         grep -q 'BPFTOOL=""' "$XDP_REAL" || { echo "FAIL: BPFTOOL not cleared"; exit 1; }
         echo "OK: patch verified statically"
 
+    - name: Prepare host tools and toolchain
+      working-directory: ./openwrt
+      run: |
+        set -e
+        LOG=/tmp/tools.log
+        echo ">>> make tools/install"
+        make tools/install -j$(nproc) >"$LOG" 2>&1 || { echo "tools/install failed:"; tail -n 80 "$LOG"; exit 1; }
+        echo ">>> make toolchain/install"
+        make toolchain/install -j$(nproc) >"$LOG" 2>&1 || { echo "toolchain/install failed:"; tail -n 80 "$LOG"; exit 1; }
+        echo ">>> host tools and toolchain ready"
+
+    - name: Pre-build xdp-tools only
+      working-directory: ./openwrt
+      run: |
+        set -e
+        LOG=/tmp/xdp-build.log
+        make package/network/utils/xdp-tools/compile V=s >"$LOG" 2>&1 || {
+          echo "xdp-tools pre-build FAILED:"
+          tail -n 120 "$LOG"
+          exit 1
+        }
+        echo ">>> xdp-tools pre-build OK"
+        grep -n 'xdp-dispatcher.embed.o' "$LOG" | tail -n 5 || true
     - name: Pre-build xdp-tools only (early failure detection)
       working-directory: ./openwrt
       run: |
