@@ -48,23 +48,6 @@ define Package/honk
     +ca-bundle +ip-full \
     +kmod-sched-core +kmod-sched-bpf +kmod-veth +kmod-nft-queue \
     +v2ray-geoip +v2ray-geosite \
-    +@KERNEL_XDP_SOCKETS \
-    +HONK_USE_VMLINUX_BTF:vmlinux-btf
-endef
-
-define Package/honk/config
-	choice
-		prompt "BTF source for CO-RE"
-		default HONK_USE_KERNEL_BTF
-		depends on PACKAGE_honk
-
-	config HONK_USE_KERNEL_BTF
-		bool "Use kernel BTF (integrated)"
-		depends on KERNEL_DEBUG_INFO_BTF
-
-	config HONK_USE_VMLINUX_BTF
-		bool "Use vmlinux-btf package"
-	endchoice
 endef
 
 define Package/honk/conffiles
