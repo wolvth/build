@@ -528,18 +528,14 @@ jobs:
       run: |
         make download -j8
 
-    - name: Patch xdp-tools (BPFTOOL + gc-sections) and query deps
+    - name: Patch xdp-tools
       working-directory: ./openwrt
       run: |
         set -e
 
         echo "==================== Dependency query ===================="
-        echo ">>> packages that depend on libxdp163"
-        make package_whatdepends PACKAGE="libxdp163" 2>&1 | tail -n 40 || true
-        echo ">>> packages that depend on libxdp"
-        make package_whatdepends PACKAGE="libxdp" 2>&1 | tail -n 40 || true
-        echo ">>> packages that depend on xdp-tools"
-        make package_whatdepends PACKAGE="xdp-tools" 2>&1 | tail -n 40 || true
+        echo ">>> packages whose Makefile mentions libxdp (text grep, no full parse)"
+        grep -rn 'DEPENDS.*libxdp' --include=Makefile . 2>/dev/null | grep -v 'network/utils/xdp-tools' || echo "(no other package depends on libxdp)"
         echo ">>> selected config entries for xdp/libxdp"
         grep -E '^CONFIG_PACKAGE_(libxdp|xdp-)' .config || echo "(none selected)"
         echo "========================================================="
@@ -550,24 +546,53 @@ jobs:
         XDP_REAL=$(realpath "$XDP_MAKEFILE")
         echo "Patching: $XDP_REAL"
 
-        # 1. BPFTOOL=""
+        # 1. BPFTOOL=""（让 xdp-tools 忽略主机上的 bpftool，跳过额外工具编译）
         if ! grep -q 'BPFTOOL=""' "$XDP_REAL"; then
           sed -i 's|^[[:space:]]*BPFTOOL=.*|BPFTOOL=""|' "$XDP_REAL"
         fi
 
-        # 2. PKG_BUILD_FLAGS:=no-gc-sections
-        if ! grep -q '^PKG_BUILD_FLAGS.*no-gc-sections' "$XDP_REAL"; then
-          if grep -q '^PKG_BUILD_FLAGS' "$XDP_REAL"; then
-            sed -i 's/^PKG_BUILD_FLAGS.*/PKG_BUILD_FLAGS:=no-gc-sections/' "$XDP_REAL"
-          else
-            sed -i '/^PKG_INSTALL:=1$/a PKG_BUILD_FLAGS:=no-gc-sections' "$XDP_REAL"
-          fi
+        # 2. 定义 XDP_LDFLAGS：从 TARGET_LDFLAGS 中过滤掉 -Wl,--gc-sections
+        #    插入到 TARGET_LDFLAGS += $(INTL_LDFLAGS) 之后
+        if ! grep -q '^XDP_LDFLAGS' "$XDP_REAL"; then
+          sed -i '/^TARGET_LDFLAGS += \$(INTL_LDFLAGS)$/a XDP_LDFLAGS:=$(filter-out -Wl,--gc-sections,$(TARGET_LDFLAGS))' "$XDP_REAL"
         fi
 
+        # 3. 把 CONFIGURE_VARS / MAKE_VARS 中的 LDFLAGS="$(TARGET_LDFLAGS)" 改为 XDP_LDFLAGS
+        sed -i 's/LDFLAGS="\$(TARGET_LDFLAGS)"/LDFLAGS="$(XDP_LDFLAGS)"/g' "$XDP_REAL"
+
+        # 4. 删除之前无效的 PKG_BUILD_FLAGS:=no-gc-sections（若存在），避免误导
+        sed -i '/^PKG_BUILD_FLAGS:=no-gc-sections$/d' "$XDP_REAL"
+
         echo "--- Verify patched lines ---"
-        grep -n 'BPFTOOL\|PKG_BUILD_FLAGS\|PKG_INSTALL' "$XDP_REAL"
+        grep -n 'BPFTOOL\|XDP_LDFLAGS\|LDFLAGS=\|PKG_BUILD_FLAGS' "$XDP_REAL"
         echo "========================================================="
-          
+        
+        echo "--- Strict verification ---"
+        grep -q '^XDP_LDFLAGS:=\$(filter-out -Wl,--gc-sections,\$(TARGET_LDFLAGS))' "$XDP_REAL" \
+          || { echo "FAIL: XDP_LDFLAGS not defined correctly"; exit 1; }
+        # CONFIGURE_VARS 和 MAKE_VARS 两处都应改为 XDP_LDFLAGS
+        CNT=$(grep -c 'LDFLAGS="\$(XDP_LDFLAGS)"' "$XDP_REAL")
+        [ "$CNT" -ge 2 ] || { echo "FAIL: LDFLAGS not replaced in both CONFIGURE_VARS and MAKE_VARS (found $CNT)"; exit 1; }
+        grep -q 'LDFLAGS="\$(TARGET_LDFLAGS)"' "$XDP_REAL" \
+          && { echo "FAIL: residual LDFLAGS=\"\$(TARGET_LDFLAGS)\" still present"; exit 1; } || true
+        grep -q 'BPFTOOL=""' "$XDP_REAL" || { echo "FAIL: BPFTOOL not cleared"; exit 1; }
+        echo "OK: patch verified statically"
+
+    - name: Pre-build xdp-tools only (early failure detection)
+      working-directory: ./openwrt
+      run: |
+        set -e
+        LOG=/tmp/xdp-build.log
+        echo ">>> compiling package/network/utils/xdp-tools only"
+        make package/network/utils/xdp-tools/compile V=s >"$LOG" 2>&1 || {
+          echo "xdp-tools pre-build FAILED:"
+          tail -n 120 "$LOG"
+          exit 1
+        }
+        echo ">>> xdp-tools pre-build OK"
+        # 可选：确认 xdp-dispatcher.embed.o 链接命令已不含 --gc-sections
+        grep -n 'xdp-dispatcher.embed.o' "$LOG" | tail -n 5 || true
+        
     - name: Compile OpenWrt
       working-directory: ./openwrt
       id: compile
