@@ -559,11 +559,11 @@ jobs:
           echo "========================================================="
 
           make -j1 V=s >"$MAKELOG" 2>&1 || true
-          echo ">>> Error-related lines:"
-          grep -nE 'Error [0-9]+|error:|failed to build|ERROR:' "$MAKELOG" | tail -n 40 || true
+          echo ">>>🔴 Error-related lines:"
+          grep -nE 'Error [0-9]+|error:|failed to build|ERROR:' "$MAKELOG" | tail -n 10 || true
           echo "---------------------------------------------------------"
-          echo ">>> Last 80 lines of detailed log:"
-          tail -n 80 "$MAKELOG"
+          echo ">>>🔴 Last 40 lines of detailed log:"
+          tail -n 40 "$MAKELOG"
           echo "========================================================="
         fi
 
