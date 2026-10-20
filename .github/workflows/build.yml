@@ -383,7 +383,7 @@ jobs:
             if [[ "$line" == \#* ]]; then continue; fi
             
             # 处理其他情况
-            # a. 标准开启 (CONFIG_xxx=y)
+            # a. 标准开启 (CONFIG_xxx=y|m|n)
             if [[ "$line" == CONFIG_* ]]; then
                 echo "$line" >> auto_packages.txt
                 echo "  [Config Enable]: $line"
@@ -547,7 +547,7 @@ jobs:
         echo -e "$(nproc) thread compile"
         df -hT
 
-        LOG=/tmp/build-detailed.log
+        MAKELOG=/tmp/build-detailed.log
         BUILD_OK=0
 
         if make -j$(nproc); then
@@ -558,22 +558,18 @@ jobs:
           echo "    (only to capture detailed error context; not a retry)"
           echo "========================================================="
 
-          make -j1 V=s >"$LOG" 2>&1 || true
+          make -j1 V=s >"$MAKELOG" 2>&1 || true
           echo ">>> Error-related lines:"
-          grep -nE 'Error [0-9]+|error:|failed to build|ERROR:' "$LOG" | tail -n 40 || true
+          grep -nE 'Error [0-9]+|error:|failed to build|ERROR:' "$MAKELOG" | tail -n 40 || true
           echo "---------------------------------------------------------"
           echo ">>> Last 80 lines of detailed log:"
-          tail -n 80 "$LOG"
+          tail -n 80 "$MAKELOG"
           echo "========================================================="
         fi
 
         echo "====== [Debug] 查找 uboot-rockchip 产物 ======"
-        ls -lh staging_dir/target-aarch64_generic_musl/image/ || true
-        find build_dir/ -name '*uboot-rockchip*' || true
+        ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
 
-        echo "====== [Debug] 查找 staging_dir 里的 u-boot 文件 ======"
-        find staging_dir/ -name '*uboot*' || true
-        find staging_dir/ -name '*u-boot*' || true
         find staging_dir/ -name '*r4s*' || true
         find staging_dir/ -name '*rockchip*' || true
 
@@ -585,6 +581,7 @@ jobs:
 
         echo "status=success" >> $GITHUB_OUTPUT
         echo "✅ Compilation finished. Cleaning up..."
+        ls -lh bin/targets/rockchip/armv8/ || true
         df -hT
         
     - name: Organize Files
@@ -592,7 +589,7 @@ jobs:
       if: steps.compile.outputs.status == 'success'
       run: |
         cd openwrt/bin
-        ls -lhR
+        ls -lhR packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
