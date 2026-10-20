@@ -540,46 +540,6 @@ jobs:
       run: |
         make download -j8
 
-    - name: Patch xdp-tools
-      working-directory: ./openwrt
-      run: |
-        set -e
-
-        XDP_MAKEFILE=$(find . -path '*/xdp-tools/Makefile' | head -n1)
-        [ -n "$XDP_MAKEFILE" ] || { echo "xdp-tools Makefile not found"; exit 1; }
-        XDP_REAL=$(realpath "$XDP_MAKEFILE")
-        echo "Patching: $XDP_REAL"
-
-        # 1. BPFTOOL=""
-        if ! grep -q 'BPFTOOL=""' "$XDP_REAL"; then
-          sed -i 's|^[[:space:]]*BPFTOOL=.*|BPFTOOL=""|' "$XDP_REAL"
-        fi
-
-        # 2. 先删除旧的 XDP_LDFLAGS 定义（无论之前写的是什么）
-        sed -i '/^XDP_LDFLAGS/d' "$XDP_REAL"
-
-        # 3. 重新插入正确的定义：用 %--gc-sections 通配符，避免逗号被当作参数分隔符
-        grep -q '^TARGET_LDFLAGS += \$(INTL_LDFLAGS)$' "$XDP_REAL" \
-          || { echo "FAIL: anchor 'TARGET_LDFLAGS += \$(INTL_LDFLAGS)' not found"; exit 1; }
-        sed -i '/^TARGET_LDFLAGS += \$(INTL_LDFLAGS)$/a XDP_LDFLAGS:=$(filter-out %--gc-sections,$(TARGET_LDFLAGS))' "$XDP_REAL"
-
-        # 4. 把 CONFIGURE_VARS / MAKE_VARS 中的 LDFLAGS 改为 XDP_LDFLAGS
-        sed -i 's/LDFLAGS="\$(TARGET_LDFLAGS)"/LDFLAGS="$(XDP_LDFLAGS)"/g' "$XDP_REAL"
-
-        # 5. 删除旧的 PKG_BUILD_FLAGS
-        sed -i '/^PKG_BUILD_FLAGS:=no-gc-sections$/d' "$XDP_REAL"
-
-        echo "--- Verify patched lines ---"
-        grep -n 'BPFTOOL\|XDP_LDFLAGS\|LDFLAGS=\|PKG_BUILD_FLAGS' "$XDP_REAL"
-
-        echo "--- Strict verification ---"
-        grep -q '^XDP_LDFLAGS:=\$(filter-out %--gc-sections,\$(TARGET_LDFLAGS))' "$XDP_REAL" \
-          || { echo "FAIL: XDP_LDFLAGS not defined correctly"; exit 1; }
-        CNT=$(grep -c 'LDFLAGS="\$(XDP_LDFLAGS)"' "$XDP_REAL")
-        [ "$CNT" -ge 2 ] || { echo "FAIL: LDFLAGS not replaced in both CONFIGURE_VARS and MAKE_VARS (found $CNT)"; exit 1; }
-        grep -q 'BPFTOOL=""' "$XDP_REAL" || { echo "FAIL: BPFTOOL not cleared"; exit 1; }
-        echo "OK: patch verified statically"
-
     - name: Compile OpenWrt
       working-directory: ./openwrt
       id: compile
@@ -608,7 +568,7 @@ jobs:
         fi
 
         echo "====== [Debug] 查找 uboot-rockchip 产物 ======"
-        ls -lhR staging_dir/target-aarch64_generic_musl/image/ || true
+        ls -lh staging_dir/target-aarch64_generic_musl/image/ || true
         find build_dir/ -name '*uboot-rockchip*' || true
 
         echo "====== [Debug] 查找 staging_dir 里的 u-boot 文件 ======"
