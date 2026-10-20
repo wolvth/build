@@ -68,7 +68,7 @@ _do_download() {
     local channel="$1"
     case "$channel" in
         official)
-            sh "$INSTALLER" install-prerelease >> "$LOG" 2>&1
+            sh "$INSTALLER" install >> "$LOG" 2>&1
             ;;
         action)
             if [ -f "$ACTIONS_SCRIPT" ] && [ -x "$ACTIONS_SCRIPT" ]; then
