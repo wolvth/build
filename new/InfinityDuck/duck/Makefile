@@ -2,7 +2,7 @@
 
 include $(TOPDIR)/rules.mk
 
-PKG_NAME:=dae
+PKG_NAME:=duck
 PKG_VERSION:=2.1.1
 DAE_RELEASE:=v2.1.1
 PKG_RELEASE:=1
@@ -24,7 +24,7 @@ include $(INCLUDE_DIR)/package.mk
 # 静态 ELF，musl 可直接运行），见 .github/workflows/build-apk.yml。
 # 打包时直接使用 dae/files/prebuilt/<arch>/dae，不在 OpenWrt SDK 内编译。
 
-define Package/dae
+define Package/duck
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=Web Servers/Proxies
@@ -34,15 +34,15 @@ define Package/dae
     +kmod-veth +@KERNEL_XDP_SOCKETS +v2ray-geoip +v2ray-geosite
 endef
 
-define Package/dae/description
+define Package/duck/description
   dae, means goose, is a lightweight and high-performance transparent
   proxy solution. It runs the transparent proxy and traffic diversion
   suite in the linux kernel by eBPF.
 endef
 
-define Package/dae/conffiles
-/etc/dae/
-/etc/config/dae
+define Package/duck/conffiles
+/etc/duck/
+/etc/config/duck
 endef
 
 define Build/Prepare
@@ -59,20 +59,16 @@ else
   DAE_PREBUILT:=
 endif
 
-define Package/dae/install
+define Package/duck/install
 	$(INSTALL_DIR) $(1)/usr/bin/
 	test -f "$(DAE_PREBUILT)" || { echo "prebuilt missing: $(DAE_PREBUILT)"; exit 1; }
 	$(INSTALL_BIN) $(DAE_PREBUILT) $(1)/usr/bin/dae
-	$(INSTALL_DIR) $(1)/etc/dae/
-	$(INSTALL_CONF) $(CURDIR)/files/config.dae $(1)/etc/dae/config.dae
-	$(INSTALL_DIR) $(1)/etc/dae/config.d/
-	$(INSTALL_CONF) $(CURDIR)/files/config.d/dns.dae $(1)/etc/dae/config.d/dns.dae
-	$(INSTALL_CONF) $(CURDIR)/files/config.d/node.dae $(1)/etc/dae/config.d/node.dae
-	$(INSTALL_CONF) $(CURDIR)/files/config.d/route.dae $(1)/etc/dae/config.d/route.dae
+	$(INSTALL_DIR) $(1)/etc/duck/
+	$(INSTALL_CONF) $(CURDIR)/files/config.dae $(1)/etc/duck/config.dae
 	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_CONF) $(CURDIR)/files/dae.config $(1)/etc/config/dae
+	$(INSTALL_CONF) $(CURDIR)/files/duck.config $(1)/etc/config/duck
 	$(INSTALL_DIR) $(1)/etc/init.d
-	$(INSTALL_BIN) $(CURDIR)/files/dae.init $(1)/etc/init.d/dae
+	$(INSTALL_BIN) $(CURDIR)/files/duck.init $(1)/etc/init.d/duck
 endef
 
-$(eval $(call BuildPackage,dae))
+$(eval $(call BuildPackage,duck))
