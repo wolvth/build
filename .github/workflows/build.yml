@@ -290,7 +290,9 @@ jobs:
         
         echo "  😋 检查package目录下的自定义插件仓库"
         ls -lh openwrt/package/custom_repos
-
+        bash openwrt/package/custom_repos/luci-app-honk/scripts/update_doona.sh
+        bash openwrt/package/custom_repos/luci-app-honk/scripts/update_honk_version.sh
+        
     # ==================== 步骤 🔴 Makefile 修复路径与生成插件配置 ====================
     - name: Patch Makefiles & Generate Package Config
       run: |
