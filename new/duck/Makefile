@@ -1,74 +1,135 @@
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Copyright (C) 2023 ImmortalWrt.org
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=duck
+# APK 版本号必须用下划线分隔 rc，例如 1.1.0_rc1
 PKG_VERSION:=2.1.1
-DAE_RELEASE:=v2.1.1
 PKG_RELEASE:=1
 
-# 上游 dae release 预编译产物的 sha256（语义同 honk 的 PKG_HASH，只是 dae 的二进制由
-# .github/workflows/build-apk.yml 下载，所以校验也放在那里，变量名按 arch 区分）。
-# PLACEHOLDER_* 表示尚未回填：此时 workflow 会跳过校验并在日志里打出
-# “实际 sha256 = ...”，把它填回这里即可；上游换 tag 后需要重新回填。
-DAE_HASH_X86_64:=54e202e712868fff704f4acb2ac90d5c609ca49af1798f240dc397f7a45ecfeb
-DAE_HASH_AARCH64:=bd84b6770cb335b8a45d8b1e16a95f68cf940b3edaaeeb449c187ce4b1058d0b
+UPSTREAM_VERSION:=2.1.1
+
+PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).zip
+PKG_SOURCE_URL:=https://github.com/daeuniverse/dae/releases/download/v$(UPSTREAM_VERSION)/dae-full-src.zip?
+PKG_HASH:=880d56d2f4b80c009c29693a5ec1d6a44b4958aeba6323af879787934ee0e855
 
 PKG_LICENSE:=AGPL-3.0-only
 PKG_LICENSE_FILE:=LICENSE
+PKG_MAINTAINER:=JohnsonRan <me@ihtw.moe>
+
+PKG_BUILD_DEPENDS:=golang/host bpf-headers
+PKG_BUILD_PARALLEL:=1
+PKG_BUILD_FLAGS:=no-mips16
+
+GO_PKG:=github.com/daeuniverse/dae
+GO_PKG_EXCLUDES:=control/kern/tests
+GO_PKG_LDFLAGS_X:= \
+	$(GO_PKG)/cmd.Version=$(PKG_VERSION) \
+	$(GO_PKG)/common/consts.MaxMatchSetLen_=1024
+GO_PKG_TAGS:=trace
 
 include $(INCLUDE_DIR)/package.mk
+include $(INCLUDE_DIR)/bpf.mk
+include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
-# dae 核心直接取上游 daeuniverse/dae release 的预编译静态二进制
-# （dae-linux-x86_64_v3_avx2.tar.xz / dae-linux-arm64.tar.xz 内的 usr/bin/dae，
-# 静态 ELF，musl 可直接运行），见 .github/workflows/build-apk.yml。
-# 打包时直接使用 dae/files/prebuilt/<arch>/dae，不在 OpenWrt SDK 内编译。
+UNZIP_CMD:=unzip -q -d $(PKG_BUILD_DIR) $(DL_DIR)/$(PKG_SOURCE)
 
-define Package/duck
+define Package/duck/Default
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=Web Servers/Proxies
   URL:=https://github.com/daeuniverse/dae
+endef
+
+define Package/duck
+  $(call Package/duck/Default)
   TITLE:=A lightweight and high-performance transparent proxy solution
-  DEPENDS:=+ca-bundle +kmod-sched-core +kmod-sched-bpf \
-    +kmod-veth +@KERNEL_XDP_SOCKETS +v2ray-geoip +v2ray-geosite
+  # You need enable KERNEL_DEBUG_INFO_BTF and KERNEL_BPF_EVENTS
+  DEPENDS:=$(GO_ARCH_DEPENDS) $(BPF_DEPENDS)  \
+    +ca-bundle +kmod-sched-core +kmod-sched-bpf +kmod-xdp-sockets-diag \
+    +kmod-veth
+endef
+
+define Package/duck-geoip
+  $(call Package/duck/Default)
+  TITLE:=geoip for duck
+  DEPENDS:=
+  PKGARCH:=all
+endef
+
+define Package/duck-geosite
+  $(call Package/duck/Default)
+  TITLE:=geosite for duck
+  DEPENDS:=
+  PKGARCH:=all
 endef
 
 define Package/duck/description
   dae, means goose, is a lightweight and high-performance transparent
-  proxy solution. It runs the transparent proxy and traffic diversion
-  suite in the linux kernel by eBPF.
+  proxy solution.
+
+  In order to improve the traffic diversion performance as much as possible,
+  dae runs the transparent proxy and traffic diversion suite in the linux
+  kernel by eBPF. Therefore, we have the opportunity to make the direct
+  traffic bypass the forwarding by proxy application and achieve true direct
+  traffic through. Under such a magic trick, there is almost no performance
+  loss and additional resource consumption for direct traffic.
 endef
 
 define Package/duck/conffiles
-/etc/duck/
+/etc/duck/config.dae
 /etc/config/duck
 endef
 
-define Build/Prepare
-endef
+duck_CFLAGS:= \
+	-O2 -Wall -Werror \
+	-DMAX_MATCH_SET_LEN=1024 \
+	-I$(BPF_HEADERS_DIR)/tools/lib \
+	-I$(BPF_HEADERS_DIR)/arch/$(BPF_KARCH)/include/asm/mach-generic
 
 define Build/Compile
+	( \
+		export \
+		$(GO_GENERAL_BUILD_CONFIG_VARS) \
+		$(GO_PKG_BUILD_CONFIG_VARS) \
+		$(GO_PKG_BUILD_VARS) \
+		BPF_CLANG="$(CLANG)" \
+		BPF_STRIP_FLAG="-strip=$(LLVM_STRIP)" \
+		BPF_CFLAGS="$(duck_CFLAGS)" \
+		BPF_TARGET="bpfel,bpfeb" \
+		BPF_TRACE_TARGET="$(GO_ARCH)" ; \
+		go generate $(PKG_BUILD_DIR)/control/control.go ; \
+		go generate $(PKG_BUILD_DIR)/trace/trace.go ; \
+		$(call GoPackage/Build/Compile) ; \
+	)
 endef
 
-ifeq ($(ARCH_PACKAGES),x86_64)
-  DAE_PREBUILT:=$(CURDIR)/files/prebuilt/x86_64v3/dae
-else ifeq ($(ARCH_PACKAGES),aarch64_generic)
-  DAE_PREBUILT:=$(CURDIR)/files/prebuilt/aarch64/dae
-else
-  DAE_PREBUILT:=
-endif
-
 define Package/duck/install
-	$(INSTALL_DIR) $(1)/usr/bin/
-	test -f "$(DAE_PREBUILT)" || { echo "prebuilt missing: $(DAE_PREBUILT)"; exit 1; }
-	$(INSTALL_BIN) $(DAE_PREBUILT) $(1)/usr/bin/dae
+	$(call GoPackage/Package/Install/Bin,$(1))
+
 	$(INSTALL_DIR) $(1)/etc/duck/
-	$(INSTALL_CONF) $(CURDIR)/files/config.dae $(1)/etc/duck/config.dae
+	$(INSTALL_CONF) $(PKG_BUILD_DIR)/example.dae $(1)/etc/duck/
+
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) $(CURDIR)/files/duck.config $(1)/etc/config/duck
+
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) $(CURDIR)/files/duck.init $(1)/etc/init.d/duck
 endef
 
+define Package/duck-geoip/install
+	$(INSTALL_DIR) $(1)/usr/share/dae
+	$(LN) ../v2ray/geoip.dat $(1)/usr/share/dae/geoip.dat
+endef
+
+define Package/duck-geosite/install
+	$(INSTALL_DIR) $(1)/usr/share/dae
+	$(LN) ../v2ray/geosite.dat $(1)/usr/share/dae/geosite.dat
+endef
+
+$(eval $(call GoBinPackage,duck))
 $(eval $(call BuildPackage,duck))
+$(eval $(call BuildPackage,duck-geoip))
+$(eval $(call BuildPackage,duck-geosite))
