@@ -9,11 +9,11 @@ PKG_NAME:=duck
 PKG_VERSION:=2.1.1
 PKG_RELEASE:=1
 
-UPSTREAM_VERSION:=2.1.1
+UPSTREAM_VERSION:=v2.1.1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).zip
-PKG_SOURCE_URL:=https://github.com/daeuniverse/dae/releases/download/v$(UPSTREAM_VERSION)/dae-full-src.zip?
-PKG_HASH:=880d56d2f4b80c009c29693a5ec1d6a44b4958aeba6323af879787934ee0e855
+PKG_SOURCE_URL:=https://github.com/daeuniverse/dae/releases/download/$(UPSTREAM_VERSION)/dae-full-src.zip?
+PKG_HASH:=skip
 
 PKG_LICENSE:=AGPL-3.0-only
 PKG_LICENSE_FILE:=LICENSE
