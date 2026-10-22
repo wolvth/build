@@ -78,11 +78,6 @@ define Package/duck/description
   loss and additional resource consumption for direct traffic.
 endef
 
-define Package/duck/conffiles
-/etc/duck/config.dae
-/etc/config/duck
-endef
-
 duck_CFLAGS:= \
 	-O2 -Wall -Werror \
 	-DMAX_MATCH_SET_LEN=1024 \
@@ -108,15 +103,6 @@ endef
 
 define Package/duck/install
 	$(call GoPackage/Package/Install/Bin,$(1))
-
-	$(INSTALL_DIR) $(1)/etc/duck/
-	$(INSTALL_CONF) $(PKG_BUILD_DIR)/example.dae $(1)/etc/duck/
-
-	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_CONF) $(CURDIR)/files/duck.config $(1)/etc/config/duck
-
-	$(INSTALL_DIR) $(1)/etc/init.d
-	$(INSTALL_BIN) $(CURDIR)/files/duck.init $(1)/etc/init.d/duck
 endef
 
 define Package/duck-geoip/install
