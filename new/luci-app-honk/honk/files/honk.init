@@ -82,7 +82,7 @@ start_service() {
     set_chmod_640
     rm -f /tmp/honk.version.cache
     cleanup_netns
-    hijack_resolv_conf
+    #hijack_resolv_conf
 
     procd_open_instance "$CONF"
     procd_set_param env DAE_LOCATION_ASSET="/usr/share/v2ray"
@@ -97,7 +97,7 @@ start_service() {
 }
 
 service_stopped() {
-    restore_resolv_conf
+    #restore_resolv_conf
     cleanup_netns
 }
 
