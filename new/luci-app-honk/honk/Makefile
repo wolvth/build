@@ -101,4 +101,10 @@ define Package/honk/install
 	$(INSTALL_BIN) $(CURDIR)/files/honk.init $(1)/etc/init.d/honk
 endef
 
+define Package/honk/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] || /etc/init.d/honk disable
+exit 0
+endef
+
 $(eval $(call BuildPackage,honk))
