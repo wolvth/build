@@ -34,6 +34,13 @@ start_service() {
 	config_get_bool enabled "config" "enabled" "0"
 	[ "$enabled" -eq "1" ] || return 1
 
+	if [ "$(uci -q get honk.config.enabled)" = 1 ] &&
+		ubus call service list '{"name":"honk"}' 2>/dev/null |
+		jsonfilter -q -e '@.honk.instances[*].running' | grep -q true; then
+		logger -t dae "honk is running; dae and honk cannot run at the same time, disable honk first"
+		return 1
+	fi
+
     $PROG validate -c $CONF >> $LOG 2>&1 || return 1
 
 	local log_maxbackups log_maxsize
