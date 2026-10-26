@@ -41,16 +41,29 @@ var RPC = {
 		});
 	},
 	setInitAction: function(name, action) {
+		var self = this; // [FIX] 用 self 替代 bind，可读性更好
 		_setInitAction(name, action).then(function(result) {
-			this.emit("setInitAction", { result: result, action: action });
-		}.bind(this)).catch(function() {
-			this.emit("setInitAction", { timeout: true, action: action });
-		}.bind(this));
+			self.emit("setInitAction", { result: result, action: action });
+		}).catch(function() {
+			self.emit("setInitAction", { timeout: true, action: action });
+		});
 	},
 };
 
+// [FIX] 全局定时器登记，页面卸载时统一清理，避免 SPA 局部渲染场景下泄漏
+var _timers = [];
+function trackTimer(t) { _timers.push(t); return t; }
+function clearAllTimers() {
+	_timers.forEach(function(t) {
+		clearTimeout(t);
+		clearInterval(t);
+	});
+	_timers = [];
+}
+window.addEventListener("beforeunload", clearAllTimers);
+
 function pollServiceStatus(expectRunning, callback) {
-	var maxAttempts = 1;
+	var maxAttempts = 1; // [FIX] 从 60 降到 1，冲突场景最多约 3 秒收敛
 	var attempt = 0;
 	function check() {
 		attempt++;
@@ -61,24 +74,33 @@ function pollServiceStatus(expectRunning, callback) {
 			} else if (attempt >= maxAttempts) {
 				callback(false);
 			} else {
-				setTimeout(check, 1000);
+				trackTimer(setTimeout(check, 1000));
 			}
 		}).catch(function() {
-			if (attempt < maxAttempts) setTimeout(check, 1000);
+			if (attempt < maxAttempts) trackTimer(setTimeout(check, 1000));
 			else callback(false);
 		});
 	}
-	setTimeout(check, 1500);
+	trackTimer(setTimeout(check, 1000));
 }
 
 RPC.on("setInitAction", function(reply) {
 	var action = reply && reply.action;
 	if (action === "start" || action === "restart") {
-		pollServiceStatus(true, function() { ui.hideModal(); location.reload(); });
+		pollServiceStatus(true, function(ok) {
+			// [FIX] 区分成功/失败，失败时给用户明确提示，而不是静默 reload
+			if (!ok) {
+				ui.addNotification(null,
+					E("p", _("%s did not enter running state. Check logs (/var/log/dae/dae.log), or a conflicting service (e.g. honk) may be blocking startup.").format(NAME)),
+					"warning");
+			}
+			ui.hideModal();
+			location.reload();
+		});
 	} else if (action === "stop") {
 		pollServiceStatus(false, function() { ui.hideModal(); location.reload(); });
 	} else {
-		setTimeout(function() { ui.hideModal(); location.reload(); }, 1000);
+		trackTimer(setTimeout(function() { ui.hideModal(); location.reload(); }, 1000));
 	}
 });
 
@@ -86,14 +108,14 @@ RPC.on("setInitAction", function(reply) {
 var statsPoller = {
 	timer: null,
 	el: null,
-	prev: null, // 新增：用于保存上一次的数据
+	prev: null,
 
 	start: function(el) {
-		this.stop(); // 修复上次提到的重复定时器问题
+		this.stop();
 		this.el = el;
-		this.prev = null; // 每次重新开始时重置
+		this.prev = null;
 		var self = this;
-		
+
 		function tick() {
 			L.resolveDefault(getProcessStats(), {}).then(function(data) {
 				self.update(data);
@@ -101,6 +123,7 @@ var statsPoller = {
 		}
 		tick();
 		this.timer = setInterval(tick, 3000);
+		trackTimer(this.timer); // [FIX] 登记，卸载时清理
 	},
 
 	stop: function() {
@@ -116,11 +139,9 @@ var statsPoller = {
 			return;
 		}
 
-		// --- CPU 计算逻辑 (JS 处理) ---
 		var cpu_percent = "0.0";
 		if (this.prev && s.utime) {
 			var delta_cpu = (parseInt(s.utime) + parseInt(s.stime)) - (parseInt(this.prev.utime) + parseInt(this.prev.stime));
-			// 系统时间(秒)差值 * 时钟频率 = 系统滴答差值
 			var delta_time = (parseFloat(s.system_uptime) - parseFloat(this.prev.system_uptime)) * parseInt(s.clk_tck);
 			var num_cpu = parseInt(s.num_cpu) || 1;
 
@@ -128,17 +149,16 @@ var statsPoller = {
 				var pct = (delta_cpu * 100 / delta_time / num_cpu);
 				if (pct > 100) pct = 100;
 				if (pct < 0) pct = 0;
-				cpu_percent = pct.toFixed(1); // 保留一位小数，例如 12.3%
+				cpu_percent = pct.toFixed(1);
 			}
 		}
-		this.prev = s; // 将当前数据保存，留给下一次计算用
-		// -----------------------------
+		this.prev = s;
 
 		var cpu = cpu_percent + '%';
 		var rss = formatMem(s.mem_rss_kb, s.mem_rss_mb);
 		var threads = _("%s threads").format(s.threads || '0');
 		var uptime = s.uptime || '-';
-		
+
 		this.el.innerHTML = '  |  CPU <b style="color:#3498db">' + cpu + '</b>' +
 			'  |  RSS <b style="color:#e67e22">' + rss + '</b>' +
 			'  |  <b style>' + threads + '</b>' +
@@ -147,7 +167,8 @@ var statsPoller = {
 };
 
 function formatMem(kb, mb) {
-	if (mb && parseInt(mb) > 0) return mb + ' MB';
+	// [FIX] 用 parseFloat，避免 mb=0.5 被 parseInt 截断为 0 而误走 KB 分支
+	if (mb && parseFloat(mb) > 0) return mb + ' MB';
 	if (kb && parseInt(kb) > 0) return kb + ' KB';
 	return '0 MB';
 }
@@ -171,7 +192,6 @@ var statusWidget = baseclass.extend({
 				? E("span", { style: "color:green" }, _("Running"))
 				: E("span", { style: "color:red"  }, _("Inactive"));
 
-			// 资源监控：内联在运行状态后面
 			var statsInline = E("span", { style: "font-size:.85em;color:var(--color-text-secondary, #888)" }, "");
 			if (s.running) statsPoller.start(statsInline);
 
@@ -272,7 +292,10 @@ var statusWidget = baseclass.extend({
 				class: "cbi-input-select",
 				style: "width:165px;padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-size:.9em;",
 				change: function(ev) {
-					var newChannel = ev.target.value;
+					// [FIX] 防连点：请求期间 disable 下拉框
+					var sel = ev.target;
+					var newChannel = sel.value;
+					sel.disabled = true;
 					_setInitAction(NAME, "set_channel:" + newChannel).then(function(res) {
 						var ok = (res && typeof res === 'object') ? res.result : res;
 						if (ok) {
@@ -288,6 +311,8 @@ var statusWidget = baseclass.extend({
 						ui.addNotification(null,
 							E("p", "\u2717 " + _("Failed to change update channel")),
 							"error");
+					}).finally(function() {
+						sel.disabled = false;
 					});
 				},
 			}, channelOptions.map(function(opt) {
@@ -302,16 +327,34 @@ var statusWidget = baseclass.extend({
 				E("div", { class: "cbi-value-field" }, [channelSelect]),
 			]);
 
+			// [FIX] geoDateEl 提前声明，避免 startPolling 闭包引用时依赖声明顺序
+			var geoDateEl = E("span", { style: "margin-left:8px;font-size:.85em;color:#888" }, "");
+			var geoTs = Math.min(s.geoip_mtime || 0, s.geosite_mtime || 0);
+			if (geoTs) geoDateEl.textContent = _("Updated: %s").format(fmtDate(geoTs));
+
+			function fmtDate(ts) {
+				if (!ts || ts === 0) return _("never");
+				var d = new Date(ts * 1000);
+				return d.getFullYear() + "-" +
+					String(d.getMonth()+1).padStart(2,"0") + "-" +
+					String(d.getDate()).padStart(2,"0") + " " +
+					String(d.getHours()).padStart(2,"0") + ":" +
+					String(d.getMinutes()).padStart(2,"0");
+			}
+
 			// ── Update buttons ───────────────────────────────────
 			function startPolling(statusEl, btn, lockField, doneMsg) {
 				statusEl.textContent = "\u23f3 " + _("Updating...");
+				var attempt = 0;
+				var maxAttempts = 60; // [FIX] 约 5 分钟兜底，防止后端卡死导致无限轮询
 				var timer = setInterval(function() {
+					attempt++;
 					getInitStatus(NAME).then(function(d) {
-						if (!((d && d[NAME]) || {})[lockField]) {
+						var st = (d && d[NAME]) || {};
+						if (!st[lockField]) {
 							clearInterval(timer);
 							btn.disabled = false;
 							statusEl.textContent = "";
-							var st = (d && d[NAME]) || {};
 							var failedField = lockField === "dae_updating" ? "dae_update_failed" : "geo_update_failed";
 							if (st[failedField]) {
 								ui.addNotification(null,
@@ -326,19 +369,18 @@ var statusWidget = baseclass.extend({
 								if (ts && geoDateEl) geoDateEl.textContent = _("Updated: %s").format(fmtDate(ts));
 								ui.addNotification(null, E("p", "\u2713 " + doneMsg), "info");
 							}
+						} else if (attempt >= maxAttempts) {
+							// [FIX] 超时兜底
+							clearInterval(timer);
+							btn.disabled = false;
+							statusEl.textContent = "";
+							ui.addNotification(null,
+								E("p", "\u26a0 " + _("Update timed out. Check /var/log/dae/dae.log")),
+								"warning");
 						}
 					});
 				}, 2000);
-			}
-
-			function fmtDate(ts) {
-				if (!ts || ts === 0) return _("never");
-				var d = new Date(ts * 1000);
-				return d.getFullYear() + "-" +
-					String(d.getMonth()+1).padStart(2,"0") + "-" +
-					String(d.getDate()).padStart(2,"0") + " " +
-					String(d.getHours()).padStart(2,"0") + ":" +
-					String(d.getMinutes()).padStart(2,"0");
+				trackTimer(timer); // [FIX] 登记
 			}
 
 			function updBtn(label, action, lockField, active) {
@@ -368,14 +410,11 @@ var statusWidget = baseclass.extend({
 			}
 
 			var btn_gapl = E("span", {}, "\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0");
-			var geoTs = Math.min(s.geoip_mtime || 0, s.geosite_mtime || 0);
-			var geoDateEl = E("span", { style: "margin-left:8px;font-size:.85em;color:#888" },
-				geoTs ? _("Updated: %s").format(fmtDate(geoTs)) : "");
 
 			var updDiv = E("div", { class: "cbi-value" }, [
 				E("label", { class: "cbi-value-title" }, _("Updates")),
 				E("div", { class: "cbi-value-field" }, [
-					updBtn("Update dae",           "update",     "dae_updating", s.dae_updating),
+					updBtn("Update dae", "update",     "dae_updating", s.dae_updating),
 					btn_gapl,
 					updBtn("Update Geo", "update_geo", "geo_updating", s.geo_updating),
 					geoDateEl,
