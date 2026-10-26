@@ -80,7 +80,9 @@ start_service() {
     if [ "$(uci -q get dae.config.enabled)" = 1 ] &&
 	ubus call service list '{"name":"dae"}' 2>/dev/null |
 	jsonfilter -q -e '@.dae.instances[*].running' | grep -q true; then
-	logger -t honk "dae is running; honk and dae cannot run at the same time, disable dae first"
+        msg="dae is running; honk and dae cannot run at the same time, disable dae first"
+        logger -t honk "$msg"
+        printf '[%s] [init] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$msg" >> "/var/log/honk/honk.log"
 	return 1
     fi
 
