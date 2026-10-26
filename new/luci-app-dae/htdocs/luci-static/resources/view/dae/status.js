@@ -50,7 +50,7 @@ var RPC = {
 };
 
 function pollServiceStatus(expectRunning, callback) {
-	var maxAttempts = 60;
+	var maxAttempts = 1;
 	var attempt = 0;
 	function check() {
 		attempt++;
@@ -68,7 +68,7 @@ function pollServiceStatus(expectRunning, callback) {
 			else callback(false);
 		});
 	}
-	setTimeout(check, 2000);
+	setTimeout(check, 1500);
 }
 
 RPC.on("setInitAction", function(reply) {
