@@ -1,0 +1,312 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: luci-app-dae\n"
+"POT-Creation-Date: 2026-10-31 22:53\n"
+"PO-Revision-Date: 2026-10-31 22:53\n"
+"Last-Translator: \n"
+"Language-Team: Chinese (Simplified)\n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "Running"
+msgstr "运行中"
+
+msgid "Inactive"
+msgstr "未运行"
+
+msgid "Restart failed"
+msgstr "重启失败"
+
+msgid "Start failed"
+msgstr "启动失败"
+
+msgid "%s did not enter the running state. A conflicting service (e.g. honk) or an invalid config may be the cause."
+msgstr "%s 未能进入运行状态。可能是服务冲突（例如 honk 正在运行）或配置无效。"
+
+msgid "Last %s log lines, newest first — the full log is on the Log tab."
+msgstr "最近 %s 行日志，最新在上；完整日志见「日志」标签页。"
+
+msgid "No log output."
+msgstr "没有日志输出。"
+
+msgid "Close"
+msgstr "关闭"
+
+msgid "Reload page"
+msgstr "刷新页面"
+
+msgid "%s threads"
+msgstr "%s 个线程"
+
+msgid "100% = one CPU core"
+msgstr "100% = 一个 CPU 核心"
+
+msgid "Cannot reach the dae backend (luci.dae): %s"
+msgstr "无法连接 dae 后端（luci.dae）：%s"
+
+msgid "Check that /usr/libexec/rpcd/luci.dae is executable (chmod 755), then run \"/etc/init.d/rpcd reload\"."
+msgstr "请确认 /usr/libexec/rpcd/luci.dae 有执行权限（chmod 755），然后执行 \"/etc/init.d/rpcd reload\"。"
+
+msgid "not installed or not found"
+msgstr "未安装或未找到"
+
+msgid "config saved, not applied"
+msgstr "已保存，未生效"
+
+msgid "Service Status"
+msgstr "服务状态"
+
+msgid "kernel >= 5.17 required (current: %s)"
+msgstr "需要内核 >= 5.17（当前：%s）"
+
+msgid "BPF syscall (/sys/fs/bpf)"
+msgstr "BPF 系统调用（/sys/fs/bpf）"
+
+msgid "BTF support (/sys/kernel/btf/vmlinux)"
+msgstr "BTF 支持（/sys/kernel/btf/vmlinux）"
+
+msgid "cls_bpf module"
+msgstr "cls_bpf 模块"
+
+msgid "sch_ingress module"
+msgstr "sch_ingress 模块"
+
+msgid "cgroup v2"
+msgstr "cgroup v2"
+
+msgid "kprobes"
+msgstr "kprobes"
+
+msgid "Missing module: %s"
+msgstr "缺少模块：%s"
+
+msgid "IP forwarding disabled (net.ipv4.ip_forward=0)"
+msgstr "未开启 IP 转发（net.ipv4.ip_forward=0）"
+
+msgid "nftables (nft) not found"
+msgstr "未找到 nftables（nft）"
+
+msgid "Low memory: %s MB free (dae needs ~120 MB)"
+msgstr "内存偏低：剩余 %s MB（dae 约需 120 MB）"
+
+msgid "Compatible"
+msgstr "兼容"
+
+msgid "Incompatible"
+msgstr "不兼容"
+
+msgid "issue(s)"
+msgstr "项问题"
+
+msgid "Warnings"
+msgstr "警告"
+
+msgid "Compatibility"
+msgstr "兼容性"
+
+msgid "Official (GitHub Release)"
+msgstr "官方（GitHub Release）"
+
+msgid "nightly mirror"
+msgstr "nightly 镜像"
+
+msgid "Update channel changed to: %s"
+msgstr "更新渠道已切换为：%s"
+
+msgid "Failed to change update channel"
+msgstr "切换更新渠道失败"
+
+msgid "Update Channel"
+msgstr "更新渠道"
+
+msgid "Updated: %s"
+msgstr "更新于 %s"
+
+msgid "never"
+msgstr "从未"
+
+msgid "Updating..."
+msgstr "更新中…"
+
+msgid "Update failed. Check /var/log/dae/dae.log"
+msgstr "更新失败，请查看 /var/log/dae/dae.log"
+
+msgid "Reload the page to apply."
+msgstr "刷新页面后生效"
+
+msgid "Update timed out. Check /var/log/dae/dae.log"
+msgstr "更新超时，请查看 /var/log/dae/dae.log"
+
+msgid "Update is already in progress."
+msgstr "更新正在进行中"
+
+msgid "dae updated"
+msgstr "dae 已更新"
+
+msgid "Geo databases updated"
+msgstr "Geo 数据已更新"
+
+msgid "Failed to start the update. Check the connection and retry."
+msgstr "启动更新失败，请检查网络后重试。"
+
+msgid "Last update failed (%s) — see /var/log/dae/dae.log"
+msgstr "上次更新失败（%s），请查看 /var/log/dae/dae.log"
+
+msgid "Update dae"
+msgstr "更新 dae"
+
+msgid "Update Geo"
+msgstr "更新 Geo"
+
+msgid "Updates"
+msgstr "更新"
+
+msgid "Starting %s..."
+msgstr "正在启动 %s…"
+
+msgid "Start"
+msgstr "启动"
+
+msgid "Restarting %s..."
+msgstr "正在重启 %s…"
+
+msgid "Restart"
+msgstr "重启"
+
+msgid "Stopping %s..."
+msgstr "正在停止 %s…"
+
+msgid "Stop"
+msgstr "停止"
+
+msgid "Failed to change autostart."
+msgstr "修改开机自启失败"
+
+msgid "Autostart enabled."
+msgstr "已开启开机自启"
+
+msgid "Autostart disabled."
+msgstr "已关闭开机自启"
+
+msgid "Autostart"
+msgstr "开机自启"
+
+msgid "Hot reload failed."
+msgstr "热加载失败"
+
+msgid "Config hot-reloaded."
+msgstr "配置已热加载"
+
+msgid "Hot reload"
+msgstr "热加载"
+
+msgid "Service Control"
+msgstr "服务控制"
+
+msgid "Format Code"
+msgstr "格式化"
+
+msgid "Failed to load the code editor. Using the plain text box instead."
+msgstr "代码编辑器加载失败，已改用纯文本框。"
+
+msgid "Config"
+msgstr "配置"
+
+msgid "Log"
+msgstr "日志"
+
+msgid "eBPF-based Linux high-performance transparent proxy solution."
+msgstr "基于 eBPF 的 Linux 高性能透明代理。"
+
+msgid "Configuration saved"
+msgstr "配置已保存"
+
+msgid "Use the hot reload button for most changes; some options (e.g. global / tproxy) only take effect after Restart."
+msgstr "大部分改动点「热加载」即可生效；global / tproxy 等选项需要「重启」后才生效。"
+
+msgid "Save failed"
+msgstr "保存失败"
+
+msgid "Config is valid"
+msgstr "配置有效"
+
+msgid "Validation failed"
+msgstr "校验失败"
+
+msgid "Validation error"
+msgstr "校验出错"
+
+msgid "Validate"
+msgstr "校验"
+
+msgid "Saving..."
+msgstr "保存中…"
+
+msgid "Save"
+msgstr "保存"
+
+msgid "Saved at %s"
+msgstr "已于 %s 保存"
+
+msgid "Collecting data…"
+msgstr "正在读取…"
+
+msgid "Log is empty."
+msgstr "日志为空"
+
+msgid "Log file does not exist."
+msgstr "日志文件不存在"
+
+msgid "Unknown error: %s"
+msgstr "未知错误：%s"
+
+msgid "Clear Log"
+msgstr "清空日志"
+
+msgid "Are you sure you want to clear the log file?"
+msgstr "确定要清空日志文件吗？"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Success"
+msgstr "成功"
+
+msgid "Log file has been cleared."
+msgstr "日志已清空"
+
+msgid "Error"
+msgstr "错误"
+
+msgid "Failed to clear log file: %s"
+msgstr "清空日志失败：%s"
+
+msgid "Clear"
+msgstr "清除"
+
+msgid "Scroll to tail"
+msgstr "滚到底部"
+
+msgid "Scroll to head"
+msgstr "滚到顶部"
+
+msgid "Clear Filter"
+msgstr "清除过滤"
+
+msgid "Pause Refresh"
+msgstr "暂停刷新"
+
+msgid "Resume Refresh"
+msgstr "继续刷新"
+
+msgid "Filter logs..."
+msgstr "过滤日志…"
+
+msgid "Latest %s lines, refresh every %s seconds."
+msgstr "最近 %s 行，每 %s 秒刷新"
+
+msgid "Ln %s, Col %s"
+msgstr "行 %s，列 %s"

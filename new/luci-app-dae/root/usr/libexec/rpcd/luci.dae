@@ -89,49 +89,63 @@ _do_download() {
     esac
 }
 
+# 锁文件还在、但更新进程已经不在了 → 残留锁（rpcd 重启、进程被杀），可以接管。
+# $1 可指定 /proc 的替代目录，方便单独测试。
+update_proc_alive() {
+    local base="${1:-/proc}" d
+    for d in "$base"/[0-9]*; do
+        grep -qsF -e "$INSTALLER" -e "$ACTIONS_SCRIPT" -e "$THIRD_PARTY" \
+                  -e "daeuniverse/dae" -e "v2ray-rules-dat" "$d/cmdline" && return 0
+    done
+    return 1
+}
+
 # ── 进程资源监控 (后端仅提取原始数据) ───────────────────────────────────────────
 get_process_stats() {
-    local pid rss_kb vm_kb threads uptime_str
-    pid="$(pidof dae 2>/dev/null | awk '{print $1}')"
+    local pid
+    pid="$(pidof dae 2>/dev/null)"
+    pid="${pid%% *}"
 
     if [ -z "$pid" ] || [ ! -d "/proc/$pid" ]; then
         print_json_bool 'running' '0'
         return
     fi
 
-    local utime=0 stime=0 system_uptime=0 clk_tck=100 num_cpu=1
-    local stat_fields="$(cat /proc/$pid/stat 2>/dev/null)"
-    
-    if [ -n "$stat_fields" ]; then
-        utime="$(echo "$stat_fields" | awk '{print $14}')"
-        stime="$(echo "$stat_fields" | awk '{print $15}')"
-        # 注意这里保留小数，提高前端计算精度
-        system_uptime="$(awk '{print $1}' /proc/uptime 2>/dev/null)"
-        clk_tck="$(getconf CLK_TCK 2>/dev/null || echo 100)"
-        num_cpu=$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)
-        
-        local start_time="$(echo "$stat_fields" | awk '{print $22}')"
-        local sys_up_int="${system_uptime%.*}" # 转整数用于算运行时间
-        
-        if [ "$start_time" -gt 0 ] && [ "$sys_up_int" -gt 0 ]; then
-            local run_secs=$((sys_up_int - start_time / clk_tck))
-            [ "$run_secs" -lt 0 ] && run_secs=0
-            local days=$((run_secs / 86400))
-            local hours=$(((run_secs % 86400) / 3600))
-            local mins=$(((run_secs % 3600) / 60))
-            local secs=$((run_secs % 60))
-            if [ "$days" -gt 0 ]; then
-                uptime_str="${days}d ${hours}h ${mins}m"
-            elif [ "$hours" -gt 0 ]; then
-                uptime_str="${hours}h ${mins}m ${secs}s"
-            else
-                uptime_str="${mins}m ${secs}s"
-            fi
-        fi
-        threads="$(echo "$stat_fields" | awk '{print $20}')"
-    fi
+    # 一次 awk 读完 stat / uptime / status，替代原来的十几次 fork
+    set -- $(awk -v pid="$pid" '
+        function nz(v) { return (v == "") ? "0" : v }
+        BEGIN {
+            l=""; getline l < ("/proc/" pid "/stat");  split(l, s, " ")
+            l=""; getline l < "/proc/uptime";          split(l, u, " ")
+            rss = 0
+            while ((getline l < ("/proc/" pid "/status")) > 0)
+                if (l ~ /^VmRSS:/) { split(l, r, " "); rss = r[2] + 0 }
+            printf "%s %s %s %s %s %s", nz(s[14]), nz(s[15]), nz(s[22]), nz(s[20]), nz(u[1]), nz(rss)
+        }')
 
-    rss_kb="$(awk '/^VmRSS:/{print $2}' /proc/$pid/status 2>/dev/null || echo 0)"
+    local utime="${1:-0}" stime="${2:-0}" start_time="${3:-0}"
+    local threads="${4:-0}" system_uptime="${5:-0}" rss_kb="${6:-0}"
+    local clk_tck num_cpu uptime_str=""
+
+    clk_tck="$(getconf CLK_TCK 2>/dev/null || echo 100)"
+    num_cpu=$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)
+
+    local sys_up_int="${system_uptime%.*}" # 转整数用于算运行时间
+    if [ "$start_time" -gt 0 ] && [ "${sys_up_int:-0}" -gt 0 ]; then
+        local run_secs=$((sys_up_int - start_time / clk_tck))
+        [ "$run_secs" -lt 0 ] && run_secs=0
+        local days=$((run_secs / 86400))
+        local hours=$(((run_secs % 86400) / 3600))
+        local mins=$(((run_secs % 3600) / 60))
+        local secs=$((run_secs % 60))
+        if [ "$days" -gt 0 ]; then
+            uptime_str="${days}d ${hours}h ${mins}m"
+        elif [ "$hours" -gt 0 ]; then
+            uptime_str="${hours}h ${mins}m ${secs}s"
+        else
+            uptime_str="${mins}m ${secs}s"
+        fi
+    fi
 
     json_init
     json_add_boolean 'running' '1'
@@ -149,6 +163,18 @@ get_process_stats() {
 }
 
 # ── 获取服务状态 ───────────────────────────────────────────
+# installer 把 geo 写到 /usr/share/v2ray，dae 自己下载的则在 /usr/share/dae，
+# 两处都看，取较新的时间，否则"Update Geo"之后日期不会变
+geo_mtime() {
+    local f t m=0
+    for f in "$@"; do
+        [ -f "$f" ] || continue
+        t="$(date -r "$f" +%s 2>/dev/null || echo 0)"
+        [ "${t:-0}" -gt "$m" ] && m="$t"
+    done
+    echo "$m"
+}
+
 get_init_status() {
     local name="$1"
     local version channel
@@ -184,8 +210,8 @@ get_init_status() {
     json_add_boolean 'dae_update_failed' "$dae_failed"
     json_add_boolean 'geo_update_failed' "$geo_failed"
     local geoip_mtime=0 geosite_mtime=0
-    [ -f "$GEOIP" ]    && geoip_mtime="$(date -r "$GEOIP" +%s 2>/dev/null || echo 0)"
-    [ -f "$GEOSITE" ]  && geosite_mtime="$(date -r "$GEOSITE" +%s 2>/dev/null || echo 0)"
+    geoip_mtime="$(geo_mtime /usr/share/v2ray/geoip.dat "$GEOIP")"
+    geosite_mtime="$(geo_mtime /usr/share/v2ray/geosite.dat "$GEOSITE")"
     json_add_int 'geoip_mtime' "$geoip_mtime"
     json_add_int 'geosite_mtime' "$geosite_mtime"
     json_close_object
@@ -200,16 +226,10 @@ set_init_action() {
 
     case "$action" in
         enable|disable|start|stop|restart)
-            # 启动/重启前检查二进制和配置文件	
+            # 二进制缺失时界面上根本没有服务控制行（status.js 的 !version 分支），
+            # 所以这里不再自动拉 installer —— 那会让 ubus 调用阻塞好几分钟
             ensure_directories
             ensure_uci_config
-            if [ "$action" = "start" ] || [ "$action" = "restart" ]; then
-                if ! check_dae_binary; then
-                    if [ -x "$INSTALLER" ]; then
-                        sh "$INSTALLER" install-prerelease >> "$LOG" 2>&1
-                    fi
-                fi
-            fi
             if /etc/init.d/"$name" "$action" >/dev/null 2>&1; then
                 print_json_bool "result" '1'
             else
@@ -226,14 +246,20 @@ set_init_action() {
             ;;
         # ---注释掉hot_reload行 就只保存配置，不reload ---
         reload_config)
-            /etc/init.d/dae hot_reload >/dev/null 2>&1
-            print_json_bool "result" "1"
+            # 热加载失败要如实返回，否则界面会提示"已热加载"而 dae 其实没动
+            if /etc/init.d/dae hot_reload >/dev/null 2>&1; then
+                print_json_bool "result" "1"
+            else
+                print_json_bool "result" "0"
+            fi
             ;;
         update)
             local channel
             channel="$(get_update_channel)"
             if [ -f "$DAE_LOCK" ]; then
-                print_json_bool "result" '0'; return
+                update_proc_alive && { print_json_bool "result" '0'; return; }
+                # 进程已经没了，锁是残留的，接管继续
+                rm -f "$DAE_LOCK"
             fi
             rm -f "$DAE_FAIL"
             ( touch "$DAE_LOCK"
@@ -245,7 +271,9 @@ set_init_action() {
             ;;
         update_geo)
             if [ -f "$GEO_LOCK" ]; then
-                print_json_bool "result" '0'; return
+                update_proc_alive && { print_json_bool "result" '0'; return; }
+                # 进程已经没了，锁是残留的，接管继续
+                rm -f "$GEO_LOCK"
             fi
             rm -f "$GEO_FAIL"
             ( touch "$GEO_LOCK"

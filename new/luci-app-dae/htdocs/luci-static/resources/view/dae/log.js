@@ -7,6 +7,15 @@
 
 const LOG = '/var/log/dae/dae.log';
 
+// 只渲染最近 N 行，避免每次轮询重建上万个节点
+const MAX_LINES = 2000;
+
+// 日志 tab 未激活时（LuCI 用 height:0 隐藏，不是 display:none）不做任何读取和渲染
+function paneActive(el) {
+	var pane = el.closest ? el.closest('[data-tab]') : null;
+	return !pane || pane.getAttribute('data-tab-active') === 'true';
+}
+
 return baseclass.extend({
     getRuntimeLog: function () {
         var css = '\
@@ -141,15 +150,26 @@ return baseclass.extend({
         );
 
         function formatLogLine(line) {
-            line = line.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            line = line.replace(/\b(error|failed)\b/g, '<span class="log-error">$1</span>')
-                .replace(/\b(warn|warning)\b/g, '<span class="log-warn">$1</span>')
-                .replace(/\b(info|INFO)\b/g, '<span class="log-info">$1</span>')
-                .replace(/\b(debug|DEBUG)\b/g, '<span class="log-debug">$1</span>')
-                .replace(/\blevel=(error|warn|info|debug)\b/g, 'level=<span class="log-$1">$1</span>');
-            line = line.replace(/(\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)/g, '<span class="log-ip">$1</span>');
-            line = line.replace(/\b(outbound)\b/gi, '<span class="log-outbound">$1</span>');
-            return '<div class="log-container">' + line + '</div>';
+            line = line.replace(/[<>&]/g, function (c) {
+                return c === '<' ? '&lt;' : (c === '>' ? '&gt;' : '&amp;');
+            });
+
+            // 一趟扫完：关键字 / IP，替代原来的 4 趟 replace
+            return '<div class="log-container">' + line.replace(
+                /\b(error|failed|warn(?:ing)?|info|debug|outbound)\b|\b(\d{1,3}(?:\.\d{1,3}){3})\b/gi,
+                function (m, kw, ip) {
+                    if (ip)
+                        return '<span class="log-ip">' + ip + '</span>';
+
+                    var k = kw.toLowerCase();
+                    var cls = (k === 'error' || k === 'failed') ? 'error' :
+                        k === 'info' ? 'info' :
+                        k === 'debug' ? 'debug' :
+                        k === 'outbound' ? 'outbound' : 'warn';
+
+                    return '<span class="log-' + cls + '">' + m + '</span>';
+                }
+            ) + '</div>';
         }
 
         var originalLogContent = '';
@@ -167,18 +187,44 @@ return baseclass.extend({
             };
         }
 
-        function highlightFilter(text, filter) {
-            if (!filter) return text;
-            var safeFilter = filter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            return text.replace(new RegExp('(' + safeFilter + ')', 'gi'), '<span class="filter-highlight">$1</span>');
+        // 只在文本节点上加高亮。原来直接对 HTML 字符串做 replace，
+        // 连 <span class="log-error"> 里的 class 一起替换，标签会被打碎
+        function highlightElement(rootEl, filter) {
+            var walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null);
+            var nodes = [];
+            while (walker.nextNode()) nodes.push(walker.currentNode);
+
+            nodes.forEach(function (node) {
+                var text = node.nodeValue;
+                var lower = text.toLowerCase();
+                var idx = lower.indexOf(filter);
+                if (idx < 0) return;
+
+                var frag = document.createDocumentFragment();
+                var last = 0;
+                while (idx >= 0) {
+                    if (idx > last) frag.appendChild(document.createTextNode(text.slice(last, idx)));
+                    var mark = document.createElement('span');
+                    mark.className = 'filter-highlight';
+                    mark.textContent = text.slice(idx, idx + filter.length);
+                    frag.appendChild(mark);
+                    last = idx + filter.length;
+                    idx = lower.indexOf(filter, last);
+                }
+                if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+                node.parentNode.replaceChild(frag, node);
+            });
         }
 
-        poll.add(L.bind(function () {
-            if (isPaused) return Promise.resolve();
+        function refresh() {
+            if (isPaused || !paneActive(log_textarea)) return Promise.resolve();
 
             return fs.read_direct(LOG, 'text').then(function (content) {
-                var contentLines = content.trim().split(/\r?\n/);
-                var reversedContent = contentLines.reverse();
+                // 清空日志后 dae 仍按原偏移写入，可能留下 NUL 空洞，先剔掉
+                var text = content.replace(/\u0000+/g, '').trim();
+                // 空日志不要再包一层空的 log-container，否则会顶掉"Log is empty."
+                var contentLines = text ? text.split(/\r?\n/) : [];
+                var reversedContent = contentLines.slice(-MAX_LINES).reverse();
                 var formattedLines = reversedContent.map(function (line) {
                     return formatLogLine(line);
                 });
@@ -187,15 +233,30 @@ return baseclass.extend({
                 originalLogContent = formattedContent;
                 logEntriesCache = null;
 
+                // 重建 DOM 会把 scrollTop 打回 0；按新增行的高度补偿，
+                // 这样往下翻看旧日志时不会被每 5 秒拉回顶部
+                var keepTop = log_textarea.scrollTop;
+                var prevHeight = log_textarea.scrollHeight;
+
                 var logContainer = E('pre', {});
                 logContainer.innerHTML = formattedContent || _('Log is empty.');
                 dom.content(log_textarea, logContainer);
+
+                requestAnimationFrame(function () {
+                    if (keepTop > 0)
+                        log_textarea.scrollTop = Math.max(0,
+                            keepTop + (log_textarea.scrollHeight - prevHeight));
+                    else
+                        log_textarea.scrollTop = 0;
+                });
 
                 var filterInput = document.getElementById('filterInput');
                 if (filterInput && filterInput.value)
                     applyFilter(filterInput.value);
 
             }).catch(function (e) {
+                originalLogContent = '';
+                logEntriesCache = null;
                 var log;
                 if (e.toString().includes('NotFoundError'))
                     log = E('pre', { 'wrap': 'pre' }, [_('Log file does not exist.')]);
@@ -204,7 +265,25 @@ return baseclass.extend({
 
                 dom.content(log_textarea, log);
             });
-        }));
+        }
+
+        poll.add(refresh);
+
+        // 第一次切到日志 tab 时立刻拉一次，不用等下一个 poll 周期
+        setTimeout(function () {
+            var pane = log_textarea.closest && log_textarea.closest('[data-tab]');
+            if (!pane) return;
+
+            if (pane.getAttribute('data-tab-active') === 'true') {
+                refresh();
+                return;
+            }
+
+            pane.addEventListener('cbi-tab-active', function handler() {
+                pane.removeEventListener('cbi-tab-active', handler);
+                refresh();
+            });
+        }, 0);
 
         function cacheLogEntries() {
             if (logEntriesCache) return logEntriesCache;
@@ -240,12 +319,14 @@ return baseclass.extend({
 
             requestAnimationFrame(function () {
                 entries.forEach(function (entry) {
-                    if (entry.text.includes(filter)) {
-                        entry.element.innerHTML = highlightFilter(entry.originalHtml, filter);
-                        entry.element.style.display = '';
-                    } else {
+                    if (!entry.text.includes(filter)) {
                         entry.element.style.display = 'none';
+                        return;
                     }
+                    // 先还原成原始 HTML，避免反复过滤时高亮层层嵌套
+                    entry.element.innerHTML = entry.originalHtml;
+                    entry.element.style.display = '';
+                    highlightElement(entry.element, filter);
                 });
             });
         }
@@ -264,7 +345,7 @@ return baseclass.extend({
                                 var logContainer = document.getElementById('log_textarea');
                                 var preElem = logContainer.querySelector('pre');
                                 if (preElem) {
-                                    preElem.innerHTML = _('Log file does not exist.');
+                                    preElem.innerHTML = _('Log is empty.');
                                     logEntriesCache = null;
                                     originalLogContent = '';
                                 }
@@ -341,7 +422,8 @@ return baseclass.extend({
             E('div', { 'class': 'cbi-section' }, [
                 log_textarea,
                 E('div', { 'style': 'text-align:right; margin-top: 5px;' },
-                    E('small', {}, _('Refresh every %s seconds.').format(L.env.pollinterval))
+                    E('small', {}, _('Latest %s lines, refresh every %s seconds.')
+                        .format(MAX_LINES, L.env.pollinterval))
                 )
             ])
         ]);
