@@ -447,7 +447,7 @@ var statusWidget = baseclass.extend({
 			if (geoTs) geoDateEl.textContent = _("Updated: %s").format(fmtDate(geoTs));
 
 			function fmtDate(ts) {
-				if (!ts || ts === 0) return _("never");
+ 				if (!ts) return '-';
 				var d = new Date(ts * 1000);
 				return d.getFullYear() + "-" +
 					String(d.getMonth()+1).padStart(2,"0") + "-" +

@@ -38,9 +38,6 @@ msgstr "关闭"
 msgid "Reload page"
 msgstr "刷新页面"
 
-msgid "%s threads"
-msgstr "%s 个线程"
-
 msgid "100% = one CPU core"
 msgstr "100% = 一个 CPU 核心"
 
@@ -50,38 +47,11 @@ msgstr "无法连接 dae 后端（luci.dae）：%s"
 msgid "Check that /usr/libexec/rpcd/luci.dae is executable (chmod 755), then run \"/etc/init.d/rpcd reload\"."
 msgstr "请确认 /usr/libexec/rpcd/luci.dae 有执行权限（chmod 755），然后执行 \"/etc/init.d/rpcd reload\"。"
 
-msgid "not installed or not found"
-msgstr "未安装或未找到"
-
 msgid "config saved, not applied"
-msgstr "已保存，未生效"
-
-msgid "Service Status"
-msgstr "服务状态"
+msgstr "配置已保存，未生效"
 
 msgid "kernel >= 5.17 required (current: %s)"
 msgstr "需要内核 >= 5.17（当前：%s）"
-
-msgid "BPF syscall (/sys/fs/bpf)"
-msgstr "BPF 系统调用（/sys/fs/bpf）"
-
-msgid "BTF support (/sys/kernel/btf/vmlinux)"
-msgstr "BTF 支持（/sys/kernel/btf/vmlinux）"
-
-msgid "cls_bpf module"
-msgstr "cls_bpf 模块"
-
-msgid "sch_ingress module"
-msgstr "sch_ingress 模块"
-
-msgid "cgroup v2"
-msgstr "cgroup v2"
-
-msgid "kprobes"
-msgstr "kprobes"
-
-msgid "Missing module: %s"
-msgstr "缺少模块：%s"
 
 msgid "IP forwarding disabled (net.ipv4.ip_forward=0)"
 msgstr "未开启 IP 转发（net.ipv4.ip_forward=0）"
@@ -92,9 +62,6 @@ msgstr "未找到 nftables（nft）"
 msgid "Low memory: %s MB free (dae needs ~120 MB)"
 msgstr "内存偏低：剩余 %s MB（dae 约需 120 MB）"
 
-msgid "Compatible"
-msgstr "兼容"
-
 msgid "Incompatible"
 msgstr "不兼容"
 
@@ -104,29 +71,14 @@ msgstr "项问题"
 msgid "Warnings"
 msgstr "警告"
 
-msgid "Compatibility"
-msgstr "兼容性"
-
-msgid "Official (GitHub Release)"
-msgstr "官方（GitHub Release）"
-
-msgid "nightly mirror"
-msgstr "nightly 镜像"
-
 msgid "Update channel changed to: %s"
 msgstr "更新渠道已切换为：%s"
 
 msgid "Failed to change update channel"
 msgstr "切换更新渠道失败"
 
-msgid "Update Channel"
-msgstr "更新渠道"
-
 msgid "Updated: %s"
 msgstr "更新于 %s"
-
-msgid "never"
-msgstr "从未"
 
 msgid "Updating..."
 msgstr "更新中…"
@@ -225,7 +177,7 @@ msgid "Configuration saved"
 msgstr "配置已保存"
 
 msgid "Use the hot reload button for most changes; some options (e.g. global / tproxy) only take effect after Restart."
-msgstr "大部分改动点「热加载」即可生效；global / tproxy 等选项需要「重启」后才生效。"
+msgstr "大部分改动「热加载」即可生效；global / tproxy 等选项需要「重启」。"
 
 msgid "Save failed"
 msgstr "保存失败"
