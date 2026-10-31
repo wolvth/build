@@ -231,8 +231,9 @@ RPC.on("setInitAction", function(reply) {
 		confirmRunning(function(ok, st) {
 			setBusy("");
 			// st 为 null 表示状态拿不到（rpc 抖动/超时）。这时既不能报失败，
-			// 也不能把状态行改成 Running —— 保持原样，让用户自己刷新确认。
+			// 也不能把状态行改成 Running —— 恢复成操作前的状态，让用户自己刷新确认。
 			if (st === null) {
+				setRunState(_lastRunning);   // 关键：不恢复的话 Start 按钮会一直灰着
 				ui.addTimeLimitedNotification(null,
 					E("p", _("Could not confirm the dae state — reload the page to check.")), 8000, "warning");
 				return;
