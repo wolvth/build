@@ -35,9 +35,6 @@ msgstr "没有日志输出。"
 msgid "Close"
 msgstr "关闭"
 
-msgid "Reload page"
-msgstr "刷新页面"
-
 msgid "100% = one CPU core"
 msgstr "100% = 一个 CPU 核心"
 
@@ -47,20 +44,11 @@ msgstr "无法连接 dae 后端（luci.dae）：%s"
 msgid "Check that /usr/libexec/rpcd/luci.dae is executable (chmod 755), then run \"/etc/init.d/rpcd reload\"."
 msgstr "请确认 /usr/libexec/rpcd/luci.dae 有执行权限（chmod 755），然后执行 \"/etc/init.d/rpcd reload\"。"
 
-msgid "config saved, not applied"
-msgstr "配置已保存，未生效"
-
 msgid "kernel >= 5.17 required (current: %s)"
 msgstr "需要内核 >= 5.17（当前：%s）"
 
 msgid "IP forwarding disabled (net.ipv4.ip_forward=0)"
 msgstr "未开启 IP 转发（net.ipv4.ip_forward=0）"
-
-msgid "nftables (nft) not found"
-msgstr "未找到 nftables（nft）"
-
-msgid "Low memory: %s MB free (dae needs ~120 MB)"
-msgstr "内存偏低：剩余 %s MB（dae 约需 120 MB）"
 
 msgid "Incompatible"
 msgstr "不兼容"
@@ -76,12 +64,6 @@ msgstr "更新渠道已切换为：%s"
 
 msgid "Failed to change update channel"
 msgstr "切换更新渠道失败"
-
-msgid "Updated: %s"
-msgstr "更新于 %s"
-
-msgid "Updating..."
-msgstr "更新中…"
 
 msgid "Update failed. Check /var/log/dae/dae.log"
 msgstr "更新失败，请查看 /var/log/dae/dae.log"
@@ -107,29 +89,14 @@ msgstr "启动更新失败，请检查网络后重试。"
 msgid "Last update failed (%s) — see /var/log/dae/dae.log"
 msgstr "上次更新失败（%s），请查看 /var/log/dae/dae.log"
 
-msgid "Update dae"
-msgstr "更新 dae"
-
-msgid "Update Geo"
-msgstr "更新 Geo"
-
 msgid "Updates"
 msgstr "更新"
-
-msgid "Starting %s..."
-msgstr "正在启动 %s…"
 
 msgid "Start"
 msgstr "启动"
 
-msgid "Restarting %s..."
-msgstr "正在重启 %s…"
-
 msgid "Restart"
 msgstr "重启"
-
-msgid "Stopping %s..."
-msgstr "正在停止 %s…"
 
 msgid "Stop"
 msgstr "停止"
@@ -275,77 +242,20 @@ msgstr "已取消保存"
 msgid "%s could not be read when this page loaded (%s). Reload the page before editing."
 msgstr "本页加载时未能读取 %s（%s）。请刷新页面后再编辑。"
 
-msgid "BPF syscall (/sys/fs/bpf)"
-msgstr "BPF 系统调用（/sys/fs/bpf）"
-
-msgid "BTF support (/sys/kernel/btf/vmlinux)"
-msgstr "BTF 支持（/sys/kernel/btf/vmlinux）"
-
-msgid "Compatibility"
-msgstr "兼容性"
-
-msgid "Compatible"
-msgstr "兼容"
-
 msgid "Could not confirm the dae state — reload the page to check."
 msgstr "无法确认 dae 状态 —— 请刷新页面查看。"
-
-msgid "Geo"
-msgstr "Geo 数据"
-
-msgid "GitHub Actions"
-msgstr "GitHub Actions"
-
-msgid "Missing module: %s"
-msgstr "缺少模块：%s"
 
 msgid "Nothing to save"
 msgstr "没有可保存的内容"
 
-msgid "Official (GitHub Release)"
-msgstr "官方（GitHub Release）"
-
 msgid "Save timed out"
 msgstr "保存超时"
 
-msgid "Service Status"
-msgstr "服务状态"
-
-msgid "The config is empty. dae needs at least a global and a routing section."
-msgstr "配置为空。dae 至少需要 global 和 routing 两个段。"
-
 msgid "The request timed out — reload the page to check the service state."
 msgstr "请求超时 —— 请刷新页面确认服务状态。"
-
-msgid "Update Channel"
-msgstr "更新渠道"
 
 msgid "Validation timed out"
 msgstr "校验超时"
 
 msgid "Writing %s did not finish in time. Reload the page to check the result."
 msgstr "写入 %s 未在预期时间内完成。请刷新页面确认结果。"
-
-msgid "cgroup v2"
-msgstr "cgroup v2"
-
-msgid "cls_bpf module"
-msgstr "cls_bpf 模块"
-
-msgid "dae"
-msgstr "dae"
-
-msgid "dae validate did not answer in time. Check the router load and try again."
-msgstr "dae validate 未及时返回，请检查路由器负载后重试。"
-
-msgid "kprobes"
-msgstr "kprobes"
-
-msgid "nightly mirror"
-msgstr "nightly 镜像"
-
-msgid "not installed or not found"
-msgstr "未安装或未找到"
-
-msgid "sch_ingress module"
-msgstr "sch_ingress 模块"
