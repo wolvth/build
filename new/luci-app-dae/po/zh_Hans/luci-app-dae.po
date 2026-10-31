@@ -281,9 +281,6 @@ msgstr "BPF 系统调用（/sys/fs/bpf）"
 msgid "BTF support (/sys/kernel/btf/vmlinux)"
 msgstr "BTF 支持（/sys/kernel/btf/vmlinux）"
 
-msgid "Check that /usr/libexec/rpcd/luci.dae is executable (chmod 755), then run "/etc/init.d/rpcd reload"."
-msgstr "请确认 /usr/libexec/rpcd/luci.dae 可执行（chmod 755），然后执行 "/etc/init.d/rpcd reload"。"
-
 msgid "Compatibility"
 msgstr "兼容性"
 
