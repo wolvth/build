@@ -341,7 +341,7 @@ return baseclass.extend({
                         'click': function () {
                             ui.hideModal();
                             fs.write(LOG, '').then(function () {
-                                ui.addNotification(_('Success'), _('Log file has been cleared.'), 'success');
+                                ui.addTimeLimitedNotification(_('Success'), _('Log file has been cleared.'), 5000, 'success');
                                 var logContainer = document.getElementById('log_textarea');
                                 var preElem = logContainer.querySelector('pre');
                                 if (preElem) {
@@ -350,7 +350,7 @@ return baseclass.extend({
                                     originalLogContent = '';
                                 }
                             }).catch(function (error) {
-                                ui.addNotification(_('Error'), _('Failed to clear log file: %s').format(error), 'error');
+                                ui.addTimeLimitedNotification(_('Error'), _('Failed to clear log file: %s').format(error), 8000, 'error');
                             });
                         }
                     }, _('Clear'))

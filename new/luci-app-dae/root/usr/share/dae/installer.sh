@@ -221,7 +221,14 @@ get_download_urls() {
 }
 
 ## ── Geo assets (geoip / geosite) ─────────────────────────────────────────────
-check_share_dir() { mkdir -p /usr/share/dae /usr/share/v2ray; }
+# dae 从 /usr/share/dae 读 geo，而实际数据落在 /usr/share/v2ray（v2ray-geoip /
+# v2ray-geosite 包的位置，也是这里 cp 的目标）。用软链接串起来：更新只需要覆盖
+# v2ray 目录，dae 侧不用动。只补缺失的链接，已有真实文件不覆盖。
+check_share_dir() {
+    mkdir -p /usr/share/dae /usr/share/v2ray
+    [ -e /usr/share/dae/geoip.dat ]  || ln -sf ../v2ray/geoip.dat  /usr/share/dae/geoip.dat
+    [ -e /usr/share/dae/geosite.dat ] || ln -sf ../v2ray/geosite.dat /usr/share/dae/geosite.dat
+}
 
 # 下载并校验到指定目录；$1=geoip|geosite，$2=临时目录，其余参数为按优先级排列的来源。
 # 每个来源都必须过 SHA256：下载失败 / 没有校验和 / 校验不符，就换下一个来源。

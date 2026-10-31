@@ -11,22 +11,22 @@
 
 const NAME = "dae";
 const CONF = "/etc/dae/config.dae";
-const PKG_VERSION = "";
 
-// CodeMirror resource paths
+// CodeMirror resource paths —— 用 L.resource() 而不是写死 /luci-static/，
+// LuCI 部署在子路径（反代 /luci/）时写死的路径会 404，编辑器静默退化成 textarea
 const CM_CSS = [
-	'/luci-static/resources/dae/lib/codemirror.css',
-	'/luci-static/resources/dae/addon/fold/foldgutter.css',
-	'/luci-static/resources/dae/theme/dracula.css',
+	L.resource('dae/lib/codemirror.css'),
+	L.resource('dae/addon/fold/foldgutter.css'),
+	L.resource('dae/theme/dracula.css'),
 ];
 const CM_SCRIPTS = [
-	'/luci-static/resources/dae/lib/codemirror.js',
-	'/luci-static/resources/dae/addon/edit/matchbrackets.js',
-	'/luci-static/resources/dae/addon/edit/closebrackets.js',
-	'/luci-static/resources/dae/addon/fold/foldcode.js',
-	'/luci-static/resources/dae/addon/fold/foldgutter.js',
-	'/luci-static/resources/dae/addon/fold/indent-fold.js',
-	'/luci-static/resources/dae/mode/dae/dae.js',
+	L.resource('dae/lib/codemirror.js'),
+	L.resource('dae/addon/edit/matchbrackets.js'),
+	L.resource('dae/addon/edit/closebrackets.js'),
+	L.resource('dae/addon/fold/foldcode.js'),
+	L.resource('dae/addon/fold/foldgutter.js'),
+	L.resource('dae/addon/fold/indent-fold.js'),
+	L.resource('dae/mode/dae/dae.js'),
 ];
 
 var validateConfig = rpc.declare({
@@ -37,6 +37,9 @@ var validateConfig = rpc.declare({
 
 // Global editor ref
 var _cmEditor = null;
+
+// 加载配置失败时记下来，保存前拦一道（避免把读不到的配置覆盖成空文件）
+var _configLoadError = null;
 
 // ── Load CodeMirror dynamically ────────────────────────────────
 function loadStyle(url) {
@@ -119,7 +122,6 @@ var CodeMirrorTextValue = form.TextValue.extend({
 .cm-s-dracula .CodeMirror-gutters { border-right: none !important; background-color: #282a36 !important; }\
 .cm-s-dracula .CodeMirror-linenumber { color: #6272a4 !important; }\
 .cm-s-dracula .CodeMirror-selected { background: #44475a !important; }\
-.cm-s-dracula .CodeMirror-activeline-background { background: #343746 !important; }\
 .cm-s-dracula .CodeMirror-matchingbracket { text-decoration: underline; color: #ffb86c !important; font-weight: bold; }\
 .cm-format-btn { margin-bottom: 5px; display: inline-block; }\
 .cm-editor-toolbar { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }\
@@ -145,7 +147,6 @@ var CodeMirrorTextValue = form.TextValue.extend({
 					mode: "dae",
 					indentUnit: 4,
 					tabSize: 4,
-					styleActiveLine: true,
 					lineNumbers: true,
 					theme: "dracula",
 					lineWrapping: true,
@@ -179,9 +180,8 @@ var CodeMirrorTextValue = form.TextValue.extend({
 				});
 			}).catch(function() {
 				// 编辑器脚本挂了不能连带整个页面报错，退回原生 textarea
-				ui.addNotification(null,
-					E('p', _('Failed to load the code editor. Using the plain text box instead.')),
-					'warning');
+				ui.addTimeLimitedNotification(null,
+					E('p', _('Failed to load the code editor. Using the plain text box instead.')), 8000, 'warning');
 			});
 
 			return node;
@@ -202,7 +202,18 @@ return view.extend({
 		o = s.taboption('config', CodeMirrorTextValue, '_config');
 		o.rows = 32;
 		o.load = function(section_id) {
-			return fs.read_direct(CONF).catch(function() { return ''; });
+			return fs.read_direct(CONF).catch(function(err) {
+				// 文件不存在是正常情况（首次安装，还没建配置），当空内容处理；
+				// 其它错误（权限、IO）不能静默变成空 —— 否则用户看到空白编辑器，
+				// 一保存就把原来的 config.dae 覆盖成空文件。
+				if (String(err).indexOf('NotFoundError') >= 0)
+					return '';
+
+				_configLoadError = err;
+				ui.addTimeLimitedNotification(_('Cannot read the config'),
+					E('p', {}, _('%s could not be read: %s. Saving is blocked until the page is reloaded.').format(CONF, err)), 8000, 'error');
+				return '';
+			});
 		};
 		o.write = function() {};   // bypass form write
 		o.remove = function() {};  // bypass form remove
@@ -212,7 +223,7 @@ return view.extend({
 		o.render = L.bind(log.getRuntimeLog, this);
 
 		return Promise.all([
-			stat.render(PKG_VERSION),
+			stat.render(),
 			m.render(),
 		]).then(function(nodes) {
 			var header = E('div', { 'class': 'cbi-map' }, [
@@ -227,15 +238,33 @@ return view.extend({
 	// Save: 只保存，重载交给状态栏的 Hot reload / Restart 按钮
 	handleSave: function(ev) {
 		var self = this;
+
+		// 页面加载时没读到配置，就别让保存把原文件覆盖成空内容
+		if (_configLoadError) {
+			ui.addTimeLimitedNotification(_('Save aborted'),
+				E('p', {}, _('%s could not be read when this page loaded (%s). Reload the page before editing.').format(CONF, _configLoadError)), 8000, 'error');
+			return Promise.resolve(false);
+		}
+
+		// 空配置 dae 一定不接受（validate 会报 "section global is required"），
+		// 拦在写盘之前，否则要等到下次启动才发现配置已经写坏了
+		var current = _cmEditor
+			? _cmEditor.getValue()
+			: ((document.querySelector('#view textarea') || {}).value || '');
+		if (current.trim() === '') {
+			ui.addTimeLimitedNotification(_('Nothing to save'),
+				E('p', {}, _('The config is empty. dae needs at least a global and a routing section.')), 8000, 'error');
+			return Promise.resolve(false);
+		}
+
 		return saveConfig().then(function() {
 			if (self._stat && self._stat.markSaved)
 				self._stat.markSaved();   // 状态行打"config saved, not applied"
-			ui.addNotification(_('Configuration saved'),
-				E('p', {}, _('Use the hot reload button for most changes; some options (e.g. global / tproxy) only take effect after Restart.')),
-				'info');
+			ui.addTimeLimitedNotification(_('Configuration saved'),
+				E('p', {}, _('Use the hot reload button for most changes; some options (e.g. global / tproxy) only take effect after Restart.')), 5000, 'info');
 			return true;
 		}).catch(function(err) {
-			ui.addNotification(_('Save failed'), E('p', String(err)), 'error');
+			ui.addTimeLimitedNotification(_('Save failed'), E('p', String(err)), 8000, 'error');
 			return false;
 		});
 	},
@@ -250,20 +279,40 @@ return view.extend({
 			'class': 'cbi-button cbi-button-neutral',
 			'click': function() {
 				validateBtn.disabled = true;
+
 				var content = _cmEditor
 					? _cmEditor.getValue()
 					: (document.querySelector('#view textarea') || {}).value || '';
-				validateConfig(content).then(function(res) {
+
+				// 看门狗：dae validate 卡住时（大配置/IO 慢），按钮不能一直转
+				var settled = false;
+				var guard = setTimeout(function() {
+					if (settled) return;
+					settled = true;
 					validateBtn.disabled = false;
+					ui.addTimeLimitedNotification(_('Validation timed out'),
+						E('p', {}, _('dae validate did not answer in time. Check the router load and try again.')), 8000, 'warning');
+				}, 20000);
+
+				function finish() {
+					settled = true;
+					clearTimeout(guard);
+					validateBtn.disabled = false;
+				}
+
+				validateConfig(content).then(function(res) {
+					if (settled) return;
+					finish();
 					if (res && res.valid) {
-						ui.addNotification(null, E('p', '\u2713 ' + _('Config is valid')), 'info');
+						ui.addTimeLimitedNotification(null, E('p', '\u2713 ' + _('Config is valid')), 5000, 'info');
 					} else {
-						ui.addNotification(_('Validation failed'),
-							E('p', res && res.message || _('Validation failed')), 'error');
+						ui.addTimeLimitedNotification(_('Validation failed'),
+							E('p', res && res.message || _('Validation failed')), 8000, 'error');
 					}
 				}).catch(function(err) {
-					validateBtn.disabled = false;
-					ui.addNotification(_('Validation error'), E('p', String(err)), 'error');
+					if (settled) return;
+					finish();
+					ui.addTimeLimitedNotification(_('Validation error'), E('p', String(err)), 8000, 'error');
 				});
 			},
 		}, [_('Validate')]);
@@ -282,9 +331,27 @@ return view.extend({
 				saveBtn.disabled = true;
 				saveBtn.textContent = _('Saving...');
 
-				return self.handleSave(ev).then(function(ok) {
+				// 和 Validate 一样的看门狗：写盘卡住时按钮不能一直停在 Saving...
+				var settled = false;
+				var guard = setTimeout(function() {
+					if (settled) return;
+					settled = true;
 					saveBtn.disabled = false;
 					saveBtn.textContent = _('Save');
+					ui.addTimeLimitedNotification(_('Save timed out'),
+						E('p', {}, _('Writing %s did not finish in time. Reload the page to check the result.').format(CONF)), 8000, 'warning');
+				}, 20000);
+
+				function finish() {
+					settled = true;
+					clearTimeout(guard);
+					saveBtn.disabled = false;
+					saveBtn.textContent = _('Save');
+				}
+
+				return self.handleSave(ev).then(function(ok) {
+					if (settled) return;
+					finish();
 
 					if (!ok) return;
 
@@ -294,6 +361,10 @@ return view.extend({
 					hintTimer = setTimeout(function() {
 						saveHint.style.display = 'none';
 					}, 8000);
+				}).catch(function(err) {
+					if (settled) return;
+					finish();
+					ui.addTimeLimitedNotification(_('Save failed'), E('p', {}, String(err)), 8000, 'error');
 				});
 			},
 		}, [_('Save')]);

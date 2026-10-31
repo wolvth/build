@@ -16,9 +16,6 @@ ensure_uci_config() {
 	if ! uci -q get dae.config >/dev/null 2>&1; then
 		uci set dae.config=dae
 		uci set dae.config.enabled='1'
-		uci set dae.config.config_file='/etc/dae/config.dae'
-        uci set dae.config.disable_waiting_network='0'
-        uci set dae.config.enable_dae_log='1'
 		uci set dae.config.log_maxbackups='1'
 		uci set dae.config.log_maxsize='1'
 		uci commit dae
@@ -74,9 +71,6 @@ service_triggers() {
 }
 
 hot_reload() {
-	local pid
-	/etc/init.d/dae running || return 1
-	pid="$(cat /var/run/dae.pid 2>/dev/null)"
-	[ -n "$pid" ] || return 1
-	"$PROG" reload "$pid"
+	# dae reload 不带参数时会自己读 /var/run/dae.pid，读不到或信号失败都返回非 0
+	"$PROG" reload
 }

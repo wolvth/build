@@ -15,6 +15,7 @@ readonly GEOIP="/usr/share/dae/geoip.dat"
 readonly GEOSITE="/usr/share/dae/geosite.dat"
 readonly DAE_FAIL="${DAE_LOCK}.failed"
 readonly GEO_FAIL="${GEO_LOCK}.failed"
+readonly VER_CACHE="/var/run/dae.version"
 
 . /lib/functions.sh
 . /usr/share/libubox/jshn.sh
@@ -33,9 +34,6 @@ ensure_uci_config() {
     if ! uci -q get dae.config >/dev/null 2>&1; then
         uci set dae.config=dae
         uci set dae.config.enabled='1'
-        uci set dae.config.config_file='/etc/dae/config.dae'
-        uci set dae.config.disable_waiting_network='0'
-        uci set dae.config.enable_dae_log='1'
         uci set dae.config.log_maxbackups='1'
         uci set dae.config.log_maxsize='1'
         uci commit dae
@@ -53,7 +51,24 @@ is_running() {
     [ "$(ubus call service list "{ 'name': '$1' }" | \
         jsonfilter -q -e "@['$1'].instances[*].running" | head -1)" = 'true' ]
 }
-get_version() { "$PROG" --version 2>/dev/null | awk 'NR==1{print $3}'; }
+# 版本号带缓存：dae --version 要 exec 一个 33MB 的 Go 二进制（几十到几百毫秒），
+# 而 getInitStatus 每次打开页面都会调。缓存放 /var/run（tmpfs），重启即失效；
+# 用二进制 mtime 当校验键 —— 二进制被更新或替换后自动重探，不会读到旧版本。
+get_version() {
+    [ -x "$PROG" ] || return 0
+
+    local mtime cached ver
+    mtime="$(date -r "$PROG" +%s 2>/dev/null || echo 0)"
+    cached="$(cat "$VER_CACHE" 2>/dev/null)"
+
+    case "$cached" in
+        "$mtime "*) echo "${cached#"$mtime "}"; return 0 ;;
+    esac
+
+    ver="$("$PROG" --version 2>/dev/null | awk 'NR==1{print $3}')"
+    [ -n "$ver" ] && printf '%s %s' "$mtime" "$ver" > "$VER_CACHE" 2>/dev/null
+    echo "$ver"
+}
 print_json_bool() { json_init; json_add_boolean "$1" "$2"; json_dump; json_cleanup; }
 
 # ── 更新渠道相关 ───────────────────────────────────────────

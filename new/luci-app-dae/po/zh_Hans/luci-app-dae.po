@@ -262,3 +262,93 @@ msgstr "最近 %s 行，每 %s 秒刷新"
 
 msgid "Ln %s, Col %s"
 msgstr "行 %s，列 %s"
+
+msgid "Cannot read the config"
+msgstr "无法读取配置"
+
+msgid "%s could not be read: %s. Saving is blocked until the page is reloaded."
+msgstr "无法读取 %s：%s。请刷新页面后再保存，当前已禁止保存以免覆盖原配置。"
+
+msgid "Save aborted"
+msgstr "已取消保存"
+
+msgid "%s could not be read when this page loaded (%s). Reload the page before editing."
+msgstr "本页加载时未能读取 %s（%s）。请刷新页面后再编辑。"
+
+msgid "BPF syscall (/sys/fs/bpf)"
+msgstr "BPF 系统调用（/sys/fs/bpf）"
+
+msgid "BTF support (/sys/kernel/btf/vmlinux)"
+msgstr "BTF 支持（/sys/kernel/btf/vmlinux）"
+
+msgid "Check that /usr/libexec/rpcd/luci.dae is executable (chmod 755), then run "/etc/init.d/rpcd reload"."
+msgstr "请确认 /usr/libexec/rpcd/luci.dae 可执行（chmod 755），然后执行 "/etc/init.d/rpcd reload"。"
+
+msgid "Compatibility"
+msgstr "兼容性"
+
+msgid "Compatible"
+msgstr "兼容"
+
+msgid "Could not confirm the dae state — reload the page to check."
+msgstr "无法确认 dae 状态 —— 请刷新页面查看。"
+
+msgid "Geo"
+msgstr "Geo 数据"
+
+msgid "GitHub Actions"
+msgstr "GitHub Actions"
+
+msgid "Missing module: %s"
+msgstr "缺少模块：%s"
+
+msgid "Nothing to save"
+msgstr "没有可保存的内容"
+
+msgid "Official (GitHub Release)"
+msgstr "官方（GitHub Release）"
+
+msgid "Save timed out"
+msgstr "保存超时"
+
+msgid "Service Status"
+msgstr "服务状态"
+
+msgid "The config is empty. dae needs at least a global and a routing section."
+msgstr "配置为空。dae 至少需要 global 和 routing 两个段。"
+
+msgid "The request timed out — reload the page to check the service state."
+msgstr "请求超时 —— 请刷新页面确认服务状态。"
+
+msgid "Update Channel"
+msgstr "更新渠道"
+
+msgid "Validation timed out"
+msgstr "校验超时"
+
+msgid "Writing %s did not finish in time. Reload the page to check the result."
+msgstr "写入 %s 未在预期时间内完成。请刷新页面确认结果。"
+
+msgid "cgroup v2"
+msgstr "cgroup v2"
+
+msgid "cls_bpf module"
+msgstr "cls_bpf 模块"
+
+msgid "dae"
+msgstr "dae"
+
+msgid "dae validate did not answer in time. Check the router load and try again."
+msgstr "dae validate 未及时返回，请检查路由器负载后重试。"
+
+msgid "kprobes"
+msgstr "kprobes"
+
+msgid "nightly mirror"
+msgstr "nightly 镜像"
+
+msgid "not installed or not found"
+msgstr "未安装或未找到"
+
+msgid "sch_ingress module"
+msgstr "sch_ingress 模块"

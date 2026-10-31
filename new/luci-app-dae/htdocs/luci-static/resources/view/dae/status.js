@@ -50,12 +50,58 @@ function setConfigDirty(v) {
 	_dirtyEl.style.display = v ? "" : "none";
 }
 
-// 运行状态标签，启动失败时就地改成 Inactive（避免弹窗关掉后还显示 Running）
+// 运行状态标签 + 控制按钮，跟着实际状态走（启动成功后状态行会自己刷新，
+// 不是只在页面加载时写一次）
 var _runStateEl = null;
+var _ctrls = null;
+var _lastRunning = false;   // 最近一次确认的状态，看门狗超时时用来恢复按钮
 function setRunState(running) {
-	if (!_runStateEl) return;
-	_runStateEl.textContent = running ? _("Running") : _("Inactive");
-	_runStateEl.style.color = running ? "green" : "red";
+	_lastRunning = !!running;
+	if (_runStateEl) {
+		_runStateEl.textContent = running ? _("Running") : _("Inactive");
+		_runStateEl.style.color = running ? "green" : "red";
+	}
+	if (_ctrls) {
+		_ctrls.start.disabled   = !!running;
+		_ctrls.restart.disabled = false;   // 重启任何时候都能点，不然失败一次就永久灰着
+		_ctrls.stop.disabled    = !running;
+		_ctrls.reload.disabled  = !running;
+	}
+}
+
+// 操作进行中的内联提示（不用全屏 modal 转圈：start 的 ubus 调用本身就要
+// 跑一遍 dae validate，1~3 秒，全屏遮罩会让人以为页面卡死）
+// 带看门狗：rpcd 卡住不返回时，不能让按钮一直灰着。
+var _busyEl = null;
+var _busyTimer = null;
+var BUSY_TIMEOUT_MS = 30000;
+
+function setBusy(text) {
+	if (_busyTimer) { clearTimeout(_busyTimer); _busyTimer = null; }
+	if (!_busyEl) return;
+
+	_busyEl.textContent = text || "";
+	_busyEl.style.display = text ? "" : "none";
+
+	if (!text) return;
+
+	_busyTimer = trackTimer(setTimeout(function() {
+		_busyTimer = null;
+		setBusy("");
+		setRunState(_lastRunning);   // 恢复到操作前的状态，按钮重新可用
+		ui.addTimeLimitedNotification(null,
+			E("p", _("The request timed out — reload the page to check the service state.")),
+			8000, "warning");
+	}, BUSY_TIMEOUT_MS));
+}
+
+// 版本号那一行：更新二进制之后不用整页 reload 也能刷新
+var _versionEl = null;
+function updateVersionLine(ver) {
+	if (!_versionEl) return;
+	_versionEl.textContent = ver
+		? (NAME + " " + ver)
+		: (NAME + " \u2014 " + _("not installed or not found"));
 }
 
 var RPC = {
@@ -98,17 +144,16 @@ window.addEventListener("beforeunload", clearAllTimers);
 // 而不是每点一次就从 0:00 重来
 var _updateStartedAt = {};
 
-function pollServiceStatus(expectRunning, callback) {
-	var maxAttempts = 1; // [FIX] 从 60 降到 1，冲突场景最多约 3 秒收敛
+// 停止后等 procd 真的把实例干掉再刷新页面，否则会刷新出一个还写着 Running 的页面。
+function waitUntilStopped(callback) {
+	var maxAttempts = 3;
 	var attempt = 0;
 	function check() {
 		attempt++;
 		L.resolveDefault(getInitStatus(NAME), {}).then(function(data) {
 			var running = (data && data[NAME] && data[NAME].running) === true;
-			if (expectRunning ? running : !running) {
-				callback(true);
-			} else if (attempt >= maxAttempts) {
-				callback(false);
+			if (!running || attempt >= maxAttempts) {
+				callback(!running);
 			} else {
 				trackTimer(setTimeout(check, 1000));
 			}
@@ -117,7 +162,30 @@ function pollServiceStatus(expectRunning, callback) {
 			else callback(false);
 		});
 	}
-	trackTimer(setTimeout(check, 1000));
+	trackTimer(setTimeout(check, 500));
+}
+
+// 启动后确认进程是否真的在跑。
+// 不能看 /etc/init.d/dae 的返回值：rc.common 的 start() 是
+//
+//	start() { rc_procd start_service "$@"; if eval "type service_started" ...; then ...; fi }
+//
+// start_service 里的 return 1 被那个 if 吞掉了（条件为假且无 else，if 整体返回 0），
+// 所以 init 脚本永远返回 0，rpcd 的 {"result": false} 永远不会出现。
+// 只能回到"看 running"这条路上来。ubus 调用返回时 validate 和 procd 拉起都已完成，
+// 所以这里查一次基本就能定论，再补一次 1 秒后的复查兜住极慢的情况。
+function confirmRunning(callback) {
+	L.resolveDefault(getInitStatus(NAME), {}).then(function(d) {
+		var st = d && d[NAME];
+		if (!st) { callback(true, null); return; }        // 状态拿不到，别误报失败
+		if (st.running) { callback(true, st); return; }
+		trackTimer(setTimeout(function() {
+			L.resolveDefault(getInitStatus(NAME), {}).then(function(d2) {
+				var st2 = d2 && d2[NAME];
+				callback(!st2 || !!st2.running, st2 || null);
+			}).catch(function() { callback(true, null); });
+		}, 1000));
+	}).catch(function() { callback(true, null); });
 }
 
 // ── 启动/重启失败：把原因留在屏幕上 ──────────────────────────
@@ -147,11 +215,8 @@ function showStartFailure(action) {
 				])
 				: E('p', {}, _('No log output.')),
 			E('div', { class: 'right' }, [
-				E('button', { class: 'btn', click: ui.hideModal }, _('Close')),
-				E('button', {
-					class: 'cbi-button cbi-button-action',
-					click: function() { location.reload(); }
-				}, _('Reload page'))
+				// 只留关闭：状态行和按钮已经就地修正，不需要再整页刷新一次
+				E('button', { class: 'btn cbi-button cbi-button-action', click: ui.hideModal }, _('Close'))
 			])
 		]);
 	});
@@ -159,31 +224,35 @@ function showStartFailure(action) {
 
 RPC.on("setInitAction", function(reply) {
 	var action = reply && reply.action;
+
 	if (action === "start" || action === "restart") {
-		pollServiceStatus(true, function(ok) {
-			if (ok) {
-				ui.hideModal();
-				location.reload();
+		// 不看 reply.result：init 脚本永远返回 0（见 confirmRunning 里的说明），
+		// 只能等 ubus 调用返回后再确认进程是否真的起来了。
+		confirmRunning(function(ok, st) {
+			setBusy("");
+			// st 为 null 表示状态拿不到（rpc 抖动/超时）。这时既不能报失败，
+			// 也不能把状态行改成 Running —— 保持原样，让用户自己刷新确认。
+			if (st === null) {
+				ui.addTimeLimitedNotification(null,
+					E("p", _("Could not confirm the dae state — reload the page to check.")), 8000, "warning");
 				return;
 			}
-			// 单次 1s 轮询可能误判，复核一次再下结论
-			trackTimer(setTimeout(function() {
-				L.resolveDefault(getInitStatus(NAME), {}).then(function(d) {
-					if (d && d[NAME] && d[NAME].running) {
-						ui.hideModal();
-						location.reload();
-					}
-					else {
-						showStartFailure(action);
-					}
-				});
-			}, 1500));
+			if (ok) {
+				applyRunning(true, st);   // 就地更新（含版本号），不整页 reload
+				return;
+			}
+			showStartFailure(action);   // honk 冲突 / uci 禁用 / validate 不过 / 秒崩
 		});
-	} else if (action === "stop") {
-		pollServiceStatus(false, function() { ui.hideModal(); location.reload(); });
-	} else {
-		trackTimer(setTimeout(function() { ui.hideModal(); location.reload(); }, 1000));
+		return;
 	}
+
+	if (action === "stop") {
+		waitUntilStopped(function() { setBusy(""); applyRunning(false); });
+		return;
+	}
+
+	// enable / disable / set_channel / reload_config：控件本身已经反映新状态，无需刷新
+	setBusy("");
 });
 
 // ── 资源监控（内联到运行状态后面） ───────────────────────────
@@ -216,7 +285,12 @@ var statsPoller = {
 
 	update: function(s) {
 		if (!this.el) return;
-		var running = s && (s.running === true || s.running === 1);
+		// rpc 抖动（返回空对象）时保持现状，别把状态行误改成 Inactive
+		if (!s || typeof s.running === "undefined") return;
+
+		var running = (s.running === true || s.running === 1);
+		setRunState(running);   // 状态行和按钮跟着实际状态走
+
 		if (!running) {
 			this.el.textContent = '';
 			this.prev = null;
@@ -251,6 +325,20 @@ var statsPoller = {
 	}
 };
 
+// 就地切换运行状态：不整页 reload，避免刷新卡顿（页面上的其它内容本来就不会变）
+// st 是 confirmRunning 顺手带回来的状态，用它把版本号也一并刷新 —— 版本号现在有
+// mtime 缓存，取一次只是一个 cat，不用为了它去 reload 整页。
+function applyRunning(running, st) {
+	setRunState(running);
+	if (running) {
+		if (statsPoller.el) statsPoller.start(statsPoller.el);
+	} else {
+		statsPoller.stop();
+		if (statsPoller.el) statsPoller.el.textContent = '';
+	}
+	if (st) updateVersionLine(st.version);
+}
+
 function formatMem(kb, mb) {
 	// [FIX] 用 parseFloat，避免 mb=0.5 被 parseInt 截断为 0 而误走 KB 分支
 	if (mb && parseFloat(mb) > 0) return mb + ' MB';
@@ -260,7 +348,7 @@ function formatMem(kb, mb) {
 
 // ── 主渲染 ────────────────────────────────────────────────────
 var statusWidget = baseclass.extend({
-	render: function(pkgVersion) {
+	render: function() {
 		// 区分"调用失败"和"字段为空"：resolveDefault 会把错误吞成 {}，
 		// 结果就是后端挂了却显示成"没装 dae"，还带一个 null
 		function settle(promise) {
@@ -291,17 +379,30 @@ var statusWidget = baseclass.extend({
 			var k = (compatRes.ok && compatRes.value) || {};
 
 			// ── Status ────────────────────────────────────────────
-			var versionLine = s.version
-				? (NAME + " " + s.version + (pkgVersion ? " / luci-app-dae v" + pkgVersion : ""))
-				: (NAME + " \u2014 " + _("not installed or not found") + (pkgVersion ? " / luci-app-dae v" + pkgVersion : ""));
+			var versionEl = E("div", {
+				style: "font-size:.9em;color:var(--color-text-secondary, #888);margin-bottom:2px"
+			}, s.version
+				? (NAME + " " + s.version)
+				: (NAME + " \u2014 " + _("not installed or not found")));
+			_versionEl = versionEl;
 
 			var runStateEl = s.running
 				? E("span", { style: "color:green" }, _("Running"))
 				: E("span", { style: "color:red"  }, _("Inactive"));
 			_runStateEl = runStateEl;
+			_lastRunning = !!s.running;
 
 			var statsInline = E("span", { style: "font-size:.85em;color:var(--color-text-secondary, #888)" }, "");
+			// 无论当前是否在跑都记住这个节点：页面是"停着"加载的话，
+			// 之后点 Start 成功后要能直接把采样挂上去（applyRunning → statsPoller.start）
+			statsPoller.el = statsInline;
 			if (s.running) statsPoller.start(statsInline);
+
+			// 操作进行中的内联提示（替代原来的全屏转圈）
+			var busyEl = E("span", {
+				style: "display:none;margin-left:8px;font-size:.85em;color:#e67e22"
+			}, "");
+			_busyEl = busyEl;
 
 			// 保存了但还没 Reload/Restart 时的小角标
 			var dirtyEl = E("span", {
@@ -310,8 +411,8 @@ var statusWidget = baseclass.extend({
 			_dirtyEl = dirtyEl;
 
 			var statusFieldChildren = [
-				E("div", { style: "font-size:.9em;color:var(--color-text-secondary, #888);margin-bottom:2px" }, versionLine),
-				E("div", {}, [runStateEl, dirtyEl, statsInline]),
+				versionEl,
+				E("div", {}, [runStateEl, dirtyEl, busyEl, statsInline]),
 			];
 
 			var statusDiv = E("div", { class: "cbi-value" }, [
@@ -413,18 +514,15 @@ var statusWidget = baseclass.extend({
 					_setInitAction(NAME, "set_channel:" + newChannel).then(function(res) {
 						var ok = (res && typeof res === 'object') ? res.result : res;
 						if (ok) {
-							ui.addNotification(null,
-								E("p", "\u2713 " + _("Update channel changed to: %s").format(newChannel)),
-								"info");
+							ui.addTimeLimitedNotification(null,
+								E("p", "\u2713 " + _("Update channel changed to: %s").format(newChannel)), 5000, "info");
 						} else {
-							ui.addNotification(null,
-								E("p", "\u2717 " + _("Failed to change update channel")),
-								"error");
+							ui.addTimeLimitedNotification(null,
+								E("p", "\u2717 " + _("Failed to change update channel")), 8000, "error");
 						}
 					}).catch(function() {
-						ui.addNotification(null,
-							E("p", "\u2717 " + _("Failed to change update channel")),
-							"error");
+						ui.addTimeLimitedNotification(null,
+							E("p", "\u2717 " + _("Failed to change update channel")), 8000, "error");
 					}).finally(function() {
 						sel.disabled = false;
 					});
@@ -483,26 +581,23 @@ var statusWidget = baseclass.extend({
 							statusEl.textContent = "";
 							var failedField = lockField === "dae_updating" ? "dae_update_failed" : "geo_update_failed";
 							if (st[failedField]) {
-								ui.addNotification(null,
-									E("p", "\u2717 " + _("Update failed. Check /var/log/dae/dae.log")),
-									"error");
+								ui.addTimeLimitedNotification(null,
+									E("p", "\u2717 " + _("Update failed. Check /var/log/dae/dae.log")), 8000, "error");
 							} else if (lockField === "dae_updating") {
-								ui.addNotification(null,
-									E("p", "\u2713 " + doneMsg + " \u2014 " + _("Reload the page to apply.")),
-									"info");
+								ui.addTimeLimitedNotification(null,
+									E("p", "\u2713 " + doneMsg + " \u2014 " + _("Reload the page to apply.")), 5000, "info");
 							} else {
 								var ts = Math.min(st.geoip_mtime || 0, st.geosite_mtime || 0);
 								if (ts && geoDateEl) geoDateEl.textContent = _("Updated: %s").format(fmtDate(ts));
-								ui.addNotification(null, E("p", "\u2713 " + doneMsg), "info");
+								ui.addTimeLimitedNotification(null, E("p", "\u2713 " + doneMsg), 5000, "info");
 							}
 						} else if (attempt >= maxAttempts) {
 							// [FIX] 超时兜底
 							clearInterval(timer);
 							btn.disabled = false;
 							statusEl.textContent = "";
-							ui.addNotification(null,
-								E("p", "\u26a0 " + _("Update timed out. Check /var/log/dae/dae.log")),
-								"warning");
+							ui.addTimeLimitedNotification(null,
+								E("p", "\u26a0 " + _("Update timed out. Check /var/log/dae/dae.log")), 8000, "warning");
 						}
 					}).catch(function() {
 						// 轮询本身失败时也要能收尾，否则按钮会一直灰着
@@ -510,9 +605,8 @@ var statusWidget = baseclass.extend({
 							clearInterval(timer);
 							btn.disabled = false;
 							statusEl.textContent = "";
-							ui.addNotification(null,
-								E("p", "\u26a0 " + _("Update timed out. Check /var/log/dae/dae.log")),
-								"warning");
+							ui.addTimeLimitedNotification(null,
+								E("p", "\u26a0 " + _("Update timed out. Check /var/log/dae/dae.log")), 8000, "warning");
 						}
 					});
 				}, 3000);
@@ -531,7 +625,7 @@ var statusWidget = baseclass.extend({
 							if (!ok) {
 								// 已有更新在跑（比如界面超时后又点了一次）：接上轮询继续看，
 								// 而不是只弹一句"正在进行中"然后什么都没发生
-								ui.addNotification(null, E("p", _("Update is already in progress.")), "warning");
+								ui.addTimeLimitedNotification(null, E("p", _("Update is already in progress.")), 8000, "warning");
 								startPolling(statusEl, btn, lockField,
 									action === "update" ? _("dae updated") : _("Geo databases updated"));
 								return;
@@ -541,9 +635,8 @@ var statusWidget = baseclass.extend({
 						}).catch(function() {
 							// rpc 本身失败时按钮不能一直灰着
 							btn.disabled = false;
-							ui.addNotification(null,
-								E("p", "\u2717 " + _("Failed to start the update. Check the connection and retry.")),
-								"error");
+							ui.addTimeLimitedNotification(null,
+								E("p", "\u2717 " + _("Failed to start the update. Check the connection and retry.")), 8000, "error");
 						});
 					},
 				}, [label]);
@@ -595,7 +688,10 @@ var statusWidget = baseclass.extend({
 			var btn_start = E("button", {
 				class: "btn cbi-button cbi-button-positive", disabled: true,
 				click: function() {
-					ui.showModal(null, [E("p", { class: "spinning" }, _("Starting %s...").format(NAME))]);
+					// 不用全屏 modal：这个 ubus 调用要跑一遍 dae validate，
+					// 1~3 秒，遮罩会让人以为页面卡死。改成按钮置灰 + 状态行内联提示。
+					btn_start.disabled = true;
+					setBusy(_("Starting %s...").format(NAME));
 					RPC.setInitAction(NAME, "start");
 				},
 			}, [_("Start")]);
@@ -603,7 +699,8 @@ var statusWidget = baseclass.extend({
 			var btn_restart = E("button", {
 				class: "btn cbi-button cbi-button-apply", disabled: true,
 				click: function() {
-					ui.showModal(null, [E("p", { class: "spinning" }, _("Restarting %s...").format(NAME))]);
+					btn_restart.disabled = true;
+					setBusy(_("Restarting %s...").format(NAME));
 					RPC.setInitAction(NAME, "restart");
 				},
 			}, [_("Restart")]);
@@ -611,7 +708,8 @@ var statusWidget = baseclass.extend({
 			var btn_stop = E("button", {
 				class: "btn cbi-button cbi-button-reset", disabled: true,
 				click: function() {
-					ui.showModal(null, [E("p", { class: "spinning" }, _("Stopping %s...").format(NAME))]);
+					btn_stop.disabled = true;
+					setBusy(_("Stopping %s...").format(NAME));
 					RPC.setInitAction(NAME, "stop");
 				},
 			}, [_("Stop")]);
@@ -627,15 +725,15 @@ var statusWidget = baseclass.extend({
 						var ok = (res && typeof res === "object") ? res.result : res;
 						if (ok === false) {
 							autoChk.checked = !want;
-							ui.addNotification(null, E("p", "\u2717 " + _("Failed to change autostart.")), "error");
+							ui.addTimeLimitedNotification(null, E("p", "\u2717 " + _("Failed to change autostart.")), 8000, "error");
 						}
 						else {
-							ui.addNotification(null,
-								E("p", "\u2713 " + (want ? _("Autostart enabled.") : _("Autostart disabled."))), "info");
+							ui.addTimeLimitedNotification(null,
+								E("p", "\u2713 " + (want ? _("Autostart enabled.") : _("Autostart disabled."))), 5000, "info");
 						}
 					}).catch(function() {
 						autoChk.checked = !want;
-						ui.addNotification(null, E("p", "\u2717 " + _("Failed to change autostart.")), "error");
+						ui.addTimeLimitedNotification(null, E("p", "\u2717 " + _("Failed to change autostart.")), 8000, "error");
 					}).finally(function() {
 						autoChk.disabled = false;
 					});
@@ -662,11 +760,12 @@ var statusWidget = baseclass.extend({
 						var ok = (res && typeof res === "object") ? res.result : res;
 						if (ok !== false)
 							setConfigDirty(false);   // 已生效，去掉角标
-						ui.addNotification(null,
+						ui.addTimeLimitedNotification(null,
 							E("p", ok === false ? "\u2717 " + _("Hot reload failed.") : "\u2713 " + _("Config hot-reloaded.")),
+							ok === false ? 8000 : 5000,
 							ok === false ? "error" : "info");
 					}).catch(function() {
-						ui.addNotification(null, E("p", "\u2717 " + _("Hot reload failed.")), "error");
+						ui.addTimeLimitedNotification(null, E("p", "\u2717 " + _("Hot reload failed.")), 8000, "error");
 					}).finally(function() {
 						btn_reload.disabled = false;
 					});
@@ -677,6 +776,9 @@ var statusWidget = baseclass.extend({
 			btn_restart.disabled = false;
 			btn_stop.disabled    = !s.running;
 			btn_reload.disabled  = !s.running;   // 没在跑就没什么可热加载的，和停止按钮一样灰着
+
+			// 状态行刷新时顺带把按钮的可用状态一起修正
+			_ctrls = { start: btn_start, restart: btn_restart, stop: btn_stop, reload: btn_reload };
 
 			var ctrlDiv = E("div", { class: "cbi-value" }, [
 				E("label", { class: "cbi-value-title" }, _("Service Control")),
