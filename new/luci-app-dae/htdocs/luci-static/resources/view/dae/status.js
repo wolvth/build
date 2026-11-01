@@ -560,12 +560,23 @@ var statusWidget = baseclass.extend({
 				if (!_updateStartedAt[lockField]) _updateStartedAt[lockField] = Date.now();
 				var started = _updateStartedAt[lockField];
 				var attempt = 0;
-				var maxAttempts = 100;         // 3s × 100 = 5 分钟兜底（后端仍在跑，刷新页面会接着轮询）
+				// 5 分钟只是"这个按钮还转不转"的上限，不是更新本身的时限 ——
+				// 后端弱网下可能跑得更久，到点只是把按钮放开，更新照常继续。
+				var maxAttempts = 100;
+				var staleField = lockField === "dae_updating" ? "dae_update_stale" : "geo_update_stale";
 
 				function showElapsed() {
 					var sec = Math.floor((Date.now() - started) / 1000);
 					statusEl.textContent = "\u00a0\u23f3 " + _("Updating...") + " " +
 						Math.floor(sec / 60) + ":" + ("0" + (sec % 60)).slice(-2);
+				}
+
+				// clearStart=false 时保留起始时间：超时后再点一次，计时接着走而不是从 0 开始
+				function stopPolling(clearStart) {
+					clearInterval(timer);
+					if (clearStart) delete _updateStartedAt[lockField];
+					btn.disabled = false;
+					statusEl.textContent = "";
 				}
 
 				showElapsed();
@@ -575,11 +586,18 @@ var statusWidget = baseclass.extend({
 					showElapsed();
 					getInitStatus(NAME).then(function(d) {
 						var st = (d && d[NAME]) || {};
+
+						// 后端判定"上次更新被中断"（锁还在、进程已经没了）。
+						// 既不算成功也不算失败；锁留给下次点更新时由后端接管清理。
+						if (st[staleField]) {
+							stopPolling(true);
+							ui.addTimeLimitedNotification(null,
+								E("p", "\u26a0 " + _("The last update was interrupted. Click the button again to retry.")), 8000, "warning");
+							return;
+						}
+
 						if (!st[lockField]) {
-							clearInterval(timer);
-							delete _updateStartedAt[lockField];   // 锁没了，下次重新计时
-							btn.disabled = false;
-							statusEl.textContent = "";
+							stopPolling(true);
 							var failedField = lockField === "dae_updating" ? "dae_update_failed" : "geo_update_failed";
 							if (st[failedField]) {
 								ui.addTimeLimitedNotification(null,
@@ -593,21 +611,18 @@ var statusWidget = baseclass.extend({
 								ui.addTimeLimitedNotification(null, E("p", "\u2713 " + doneMsg), 5000, "info");
 							}
 						} else if (attempt >= maxAttempts) {
-							// [FIX] 超时兜底
-							clearInterval(timer);
-							btn.disabled = false;
-							statusEl.textContent = "";
+							// 锁还在 = 后端确实还在跑，只是超过 5 分钟。放开按钮，
+							// 再点一次会走"已在更新中"分支接上轮询，不会重复下载。
+							stopPolling(false);
 							ui.addTimeLimitedNotification(null,
-								E("p", "\u26a0 " + _("Update timed out. Check /var/log/dae/dae.log")), 8000, "warning");
+								E("p", "\u26a0 " + _("The update is still running in the background \u2014 check /var/log/dae/dae.log if it does not finish.")), 8000, "warning");
 						}
 					}).catch(function() {
 						// 轮询本身失败时也要能收尾，否则按钮会一直灰着
 						if (attempt >= maxAttempts) {
-							clearInterval(timer);
-							btn.disabled = false;
-							statusEl.textContent = "";
+							stopPolling(false);
 							ui.addTimeLimitedNotification(null,
-								E("p", "\u26a0 " + _("Update timed out. Check /var/log/dae/dae.log")), 8000, "warning");
+								E("p", "\u26a0 " + _("The update is still running in the background \u2014 check /var/log/dae/dae.log if it does not finish.")), 8000, "warning");
 						}
 					});
 				}, 3000);

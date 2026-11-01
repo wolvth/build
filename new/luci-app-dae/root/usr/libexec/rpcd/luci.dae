@@ -15,6 +15,10 @@ readonly GEOIP="/usr/share/dae/geoip.dat"
 readonly GEOSITE="/usr/share/dae/geosite.dat"
 readonly DAE_FAIL="${DAE_LOCK}.failed"
 readonly GEO_FAIL="${GEO_LOCK}.failed"
+# 更新进程的 PID。只读接口靠 kill -0 判断更新是否还活着 —— 扫 /proc 太贵
+# （212 个进程逐个 grep，实测约 400ms），每 3 秒轮询一次扛不住。
+readonly DAE_PID="${DAE_LOCK}.pid"
+readonly GEO_PID="${GEO_LOCK}.pid"
 readonly VER_CACHE="/var/run/dae.version"
 
 . /lib/functions.sh
@@ -115,6 +119,27 @@ update_proc_alive() {
     return 1
 }
 
+# 锁还在、但锁里记的进程已经没了 → 更新其实已经中断（OOM / rpcd 重启 / 手动 kill）。
+# 这里只做判断，**不删锁**：删锁留给下一次 update 调用去做，那条路径是单线程的，
+# 不会和正在跑的更新并发。所以误判的后果只是"多说一句已中断"，不会跑出两份更新。
+# 刚建的锁（10 秒内）一律当作还活着，避开"锁已 touch、PID 还没写进去"的那一瞬间。
+lock_stale() {
+    local lock="$1" pidfile="$2" mt age pid
+    [ -f "$lock" ] || return 1
+
+    # 读不到 mtime 时按"还活着"处理：宁可不动，也不要误报中断
+    mt="$(date -r "$lock" +%s 2>/dev/null)"
+    [ -n "$mt" ] || return 1
+
+    age=$(( $(date +%s) - mt ))
+    [ "$age" -gt 10 ] || return 1
+
+    pid="$(cat "$pidfile" 2>/dev/null)"
+    [ -n "$pid" ] || return 0
+    kill -0 "$pid" 2>/dev/null || return 0
+    return 1
+}
+
 # ── 进程资源监控 (后端仅提取原始数据) ───────────────────────────────────────────
 get_process_stats() {
     local pid
@@ -209,16 +234,27 @@ get_init_status() {
     fi
     json_add_string 'version' "$version"
     json_add_string 'update_channel' "$channel"
-    if [ -f "$GEO_LOCK" ]; then
+
+    # 锁在 + 进程活着 = 真的在更新；锁在但进程没了 = 上次更新被中断（stale）。
+    # stale 时把 updating 报成 false，界面才会停止轮询并恢复按钮；
+    # 锁本身留着，等下一次点更新时由 update 分支接管清理。
+    local dae_stale=0 geo_stale=0
+    lock_stale "$DAE_LOCK" "$DAE_PID" && dae_stale=1
+    lock_stale "$GEO_LOCK" "$GEO_PID" && geo_stale=1
+
+    if [ -f "$GEO_LOCK" ] && [ "$geo_stale" = 0 ]; then
         json_add_boolean 'geo_updating' '1'
     else
         json_add_boolean 'geo_updating' '0'
     fi
-    if [ -f "$DAE_LOCK" ]; then
+    if [ -f "$DAE_LOCK" ] && [ "$dae_stale" = 0 ]; then
         json_add_boolean 'dae_updating' '1'
     else
         json_add_boolean 'dae_updating' '0'
     fi
+    json_add_boolean 'dae_update_stale' "$dae_stale"
+    json_add_boolean 'geo_update_stale' "$geo_stale"
+
     local dae_failed=0 geo_failed=0
     [ -f "$DAE_FAIL" ] && dae_failed=1
     [ -f "$GEO_FAIL" ] && geo_failed=1
@@ -274,23 +310,26 @@ set_init_action() {
             if [ -f "$DAE_LOCK" ]; then
                 update_proc_alive && { print_json_bool "result" '0'; return; }
                 # 进程已经没了，锁是残留的，接管继续
-                rm -f "$DAE_LOCK"
+                rm -f "$DAE_LOCK" "$DAE_PID"
             fi
-            rm -f "$DAE_FAIL"
+            rm -f "$DAE_FAIL" "$DAE_PID"
             ( touch "$DAE_LOCK"
               _do_download "$channel"
               rc=$?
               rm -f "$DAE_LOCK"
               [ $rc -eq 0 ] || touch "$DAE_FAIL" ) &
+            # $! 是上面那个子 shell 的 PID，整个下载期间它都活着，
+            # 只读接口用 kill -0 就能判断更新是否还在跑
+            echo "$!" > "$DAE_PID"
             print_json_bool "result" '1'
             ;;
         update_geo)
             if [ -f "$GEO_LOCK" ]; then
                 update_proc_alive && { print_json_bool "result" '0'; return; }
                 # 进程已经没了，锁是残留的，接管继续
-                rm -f "$GEO_LOCK"
+                rm -f "$GEO_LOCK" "$GEO_PID"
             fi
-            rm -f "$GEO_FAIL"
+            rm -f "$GEO_FAIL" "$GEO_PID"
             ( touch "$GEO_LOCK"
               sh "$INSTALLER" update-geoip >> "$LOG" 2>&1
               rc=$?
@@ -300,6 +339,7 @@ set_init_action() {
               fi
               rm -f "$GEO_LOCK"
               [ $rc -eq 0 ] || touch "$GEO_FAIL" ) &
+            echo "$!" > "$GEO_PID"
             print_json_bool "result" '1'
             ;;
         *)

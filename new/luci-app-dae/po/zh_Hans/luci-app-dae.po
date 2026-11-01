@@ -259,3 +259,9 @@ msgstr "校验超时"
 
 msgid "Writing %s did not finish in time. Reload the page to check the result."
 msgstr "写入 %s 未在预期时间内完成。请刷新页面确认结果。"
+
+msgid "The last update was interrupted. Click the button again to retry."
+msgstr "上次更新已中断。请再点一次更新重试。"
+
+msgid "The update is still running in the background — check /var/log/dae/dae.log if it does not finish."
+msgstr "更新仍在后台进行 —— 如果长时间不结束，请查看 /var/log/dae/dae.log。"

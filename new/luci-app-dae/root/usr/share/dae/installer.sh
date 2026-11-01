@@ -47,9 +47,18 @@ SHA256SUM() {
 
 ## ── Network helper ───────────────────────────────────────────────────────────
 # 统一超时与重试：curl 若无限挂起，更新锁（/var/run/dae-update.lock）就永远不释放
-CURL_OPTS='-fsSL --connect-timeout 15 --max-time 300 --retry 2 --retry-delay 2'
+# -C - 断点续传：--retry 重试时从已下载的字节处继续，而不是每次从 0 重来。
+# 没有它，链路慢于 16MB/300s（约 55 KB/s）时永远下不完，重试只是重复浪费 5 分钟。
+CURL_OPTS='-fsSL --connect-timeout 15 --max-time 300 --retry 2 --retry-delay 2 -C -'
 fetch() {
     curl $CURL_OPTS "$@"
+}
+
+# 非致命的小文件（示例配置、shell 补全）不占 300s 的预算：
+# 弱网下为了 19 KB 的文件白等 5 分钟不值得，拿不到就算了。
+SOFT_CURL_OPTS='-fsSL --connect-timeout 10 --max-time 20 --retry 1 --retry-delay 1'
+fetch_soft() {
+    curl $SOFT_CURL_OPTS "$@"
 }
 
 # geo 数据来自 v2ray-rules-dat，与 dae 版本无关，固定地址
@@ -371,23 +380,24 @@ install_dae() {
 download_example_config() {
     mkdir -p /etc/dae
     echo "${GREEN}Downloading example config...${RESET}"
-    fetch "$example_config_url" -o /etc/dae/example.dae || notify_example='yes'
+    fetch_soft "$example_config_url" -o /etc/dae/example.dae || notify_example='yes'
 }
 
 download_completions() {
+    # 补全脚本只有几十 KB，同样走短超时，别为了它拖住整个更新
     if command -v bash >/dev/null 2>&1; then
         mkdir -p /usr/share/bash-completion/completions
-        fetch "$bash_completion_url" -o /usr/share/bash-completion/completions/dae \
+        fetch_soft "$bash_completion_url" -o /usr/share/bash-completion/completions/dae \
             || echo "${YELLOW}bash completion download failed (non-fatal).${RESET}"
     fi
     if command -v zsh >/dev/null 2>&1; then
         mkdir -p /usr/share/zsh/site-functions
-        fetch "$zsh_completion_url" -o /usr/share/zsh/site-functions/_dae \
+        fetch_soft "$zsh_completion_url" -o /usr/share/zsh/site-functions/_dae \
             || echo "${YELLOW}zsh completion download failed (non-fatal).${RESET}"
     fi
     if command -v fish >/dev/null 2>&1; then
         mkdir -p /usr/share/fish/vendor_completions.d
-        fetch "$fish_completion_url" -o /usr/share/fish/vendor_completions.d/dae.fish \
+        fetch_soft "$fish_completion_url" -o /usr/share/fish/vendor_completions.d/dae.fish \
             || echo "${YELLOW}fish completion download failed (non-fatal).${RESET}"
     fi
 }
@@ -407,6 +417,10 @@ stop_dae() {
     fi
 }
 
+# 进程是否真的在跑。不用 /etc/init.d/dae running（它依赖 ubus 往返，
+# 且刚 start 完的瞬间可能还没同步），直接看 pidof 最直接。
+dae_running() { pidof dae >/dev/null 2>&1; }
+
 # init 脚本由 luci-app-dae 包提供；缺失时只落盘二进制，不动服务
 check_init_script() {
     [ -x /etc/init.d/dae ] && return 0
@@ -419,10 +433,21 @@ start_dae() {
     [ "$dae_stopped" = '1' ] || return 0
 
     echo "${GREEN}Starting dae...${RESET}"
-    if /etc/init.d/dae start; then
-        echo "${GREEN}dae started.${RESET}"
-        return 0
-    fi
+    /etc/init.d/dae start
+
+    # /etc/init.d/* start 的返回值不可信：rc.common 的 start() 用 if 包住
+    # start_service，失败也返回 0（实测 start_service 里 return 1，脚本仍 exit 0）。
+    # 所以只能等一会儿看进程到底在不在。
+    # 窗口取 4 秒：procd 的 respawn 默认 5 秒后才重新拉起，窗口短于它，
+    # 才不会把"崩溃→被 respawn 拉起来"误判成启动成功。
+    local i
+    for i in 1 2 3 4; do
+        sleep 1
+        if dae_running; then
+            echo "${GREEN}dae started.${RESET}"
+            return 0
+        fi
+    done
 
     echo "${RED}Failed to start dae — see /var/log/dae/dae.log for the reason.${RESET}"
     if [ ! -f /etc/dae/config.dae ]; then
