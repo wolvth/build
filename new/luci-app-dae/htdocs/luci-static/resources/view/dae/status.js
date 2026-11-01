@@ -515,7 +515,7 @@ var statusWidget = baseclass.extend({
 			var channelOptions = [
 				{ value: "official",    label: _("Official (GitHub Release)") },
 				{ value: "action",      label: _("GitHub Actions") },
-				{ value: "third_party", label: _("nightly mirror") },
+				{ value: "nightly",     label: _("Nightly build (GitHub)") },
 			];
 
 			var channelSelect = E("select", {

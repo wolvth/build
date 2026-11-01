@@ -61,6 +61,25 @@ fetch_soft() {
     curl $SOFT_CURL_OPTS "$@"
 }
 
+# GitHub 直连失败时退到 worker CDN 前缀代理（借自旧的 third-party.sh）。
+# 只对 github.com 的下载地址生效；用 use-cdn 时 URL 本身已经是 CDN，不再套一层。
+CDN_PREFIX='https://github.abskoop.workers.dev/'
+download() {
+    _dl_url="$1"
+    _dl_out="$2"
+    fetch "$_dl_url" -o "$_dl_out" && return 0
+
+    case "$_dl_url" in
+        https://github.com/*)
+            [ "$use_cdn" = 'yes' ] && return 1
+            echo "${YELLOW}warning: direct download failed, retrying via CDN${RESET}"
+            rm -f "$_dl_out"          # 代理不一定支持 Range，别拿半截文件续传
+            fetch "${CDN_PREFIX}${_dl_url}" -o "$_dl_out" && return 0
+            ;;
+    esac
+    return 1
+}
+
 # geo 数据来自 v2ray-rules-dat，与 dae 版本无关，固定地址
 # 主源 GitHub Release；拉不动或校验不过时退到 jsDelivr 镜像（同一版本，sha256 一致）
 GEOIP_URL='https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat'
@@ -126,9 +145,43 @@ check_arch() {
 
 ## ── Version helpers ──────────────────────────────────────────────────────────
 # POSIX version compare — no sort -V (not in busybox)
-# Returns: 0=equal  1=$1>$2  2=$1<$2
+# Returns: 0=equal  1=$1>$2  2=$1<$2  3=无法比较（有一边是拿不到版本号的 nightly）
+# nightly 的版本串形如 0.0.0.nightly.20261031.r865.29a702，纯数字比较会全部塌成
+# 0.0.0（两个不同的 nightly 判等、和正式版也比不出高低）。这里单独抽出"日期 rev"。
+nightly_key() {
+    echo "$1" | sed -n 's/.*nightly\.\([0-9]\{8\}\)\.r\([0-9][0-9]*\).*/\1 \2/p'
+}
+
+# daeuniverse 的滚动发布 tag 名字就叫 "nightly"，没有版本号，拿它没法比大小
+is_rolling_nightly() {
+    case "$1" in
+        *nightly*) [ -z "$(nightly_key "$1")" ] ;;
+        *) return 1 ;;
+    esac
+}
+
 ver_compare() {
     [ "$1" = "$2" ] && { echo 0; return; }
+
+    _k1="$(nightly_key "$1")"
+    _k2="$(nightly_key "$2")"
+    if [ -n "$_k1" ] && [ -n "$_k2" ]; then
+        # 两个都是 nightly：先比日期，再比 rev
+        _d1="${_k1% *}"; _r1="${_k1#* }"
+        _d2="${_k2% *}"; _r2="${_k2#* }"
+        [ "$_d1" -gt "$_d2" ] && { echo 1; return; }
+        [ "$_d1" -lt "$_d2" ] && { echo 2; return; }
+        [ "$_r1" -gt "$_r2" ] && { echo 1; return; }
+        [ "$_r1" -lt "$_r2" ] && { echo 2; return; }
+        echo 0; return
+    fi
+    # 有一边是滚动 nightly（tag 就叫 "nightly"，没有版本号）→ 没法排序
+    if is_rolling_nightly "$1" || is_rolling_nightly "$2"; then
+        echo 3; return
+    fi
+    # 只剩一边是带日期的 nightly → 它比任何正式版新
+    [ -n "$_k1" ] && { echo 1; return; }
+    [ -n "$_k2" ] && { echo 2; return; }
 
     # dev/unstable builds always older than any proper release
     case "$1" in
@@ -171,7 +224,12 @@ check_local_version() {
 }
 
 check_online_version() {
-    if [ "$allow_prereleases" = 'yes' ]; then
+    if [ "$use_nightly" = 'yes' ]; then
+        # 固定 tag：per_page=1 取的是"最新创建的那个 release"，官方哪天发了新正式版
+        # 就会把 nightly 渠道带偏到正式版上，所以这里直接按 tag 取。
+        api_url='https://api.github.com/repos/daeuniverse/dae/releases/tags/nightly'
+        echo "${GREEN}[2/4] Fetching the rolling nightly release...${RESET}"
+    elif [ "$allow_prereleases" = 'yes' ]; then
         api_url='https://api.github.com/repos/daeuniverse/dae/releases?per_page=1'
         echo "${GREEN}[2/4] Fetching latest release (including pre-releases)...${RESET}"
     else
@@ -196,17 +254,22 @@ check_online_version() {
     echo "${GREEN}      Remote version: ${latest_version}${RESET}"
 }
 
+# 渠道 = 目标版本，不是"谁更新"。所以这里只判断"和目标是否相同"：
+#   相同 → 不下载，日志里说清楚，返回 0（返回非 0 会被 rpcd 当成更新失败）
+#   不同 → 一律装目标版本（可能升级，也可能降级；从 nightly 切回 official 就是这条）
+# ver_compare 只用来把方向说清楚，不参与决策。
 compare_version() {
     echo "${GREEN}[3/4] Comparing versions...${RESET}"
     if [ "$current_version" = "$latest_version" ]; then
         compare_status=0
-        echo "${GREEN}      Already up-to-date.${RESET}"
+        echo "${GREEN}      Same version.${RESET}"
         return
     fi
-    compare_status="$(ver_compare "$current_version" "$latest_version")"
-    case "$compare_status" in
-        1) echo "${YELLOW}      Local ($current_version) is newer than remote ($latest_version).${RESET}" ;;
-        2) echo "${GREEN}      Update available: $current_version -> $latest_version${RESET}" ;;
+    compare_status=2
+    case "$(ver_compare "$current_version" "$latest_version")" in
+        1) echo "${YELLOW}      Local ($current_version) is newer than remote ($latest_version) — switching to the channel version.${RESET}" ;;
+        3) echo "${YELLOW}      Remote is a rolling nightly build ($latest_version) — no version number to compare.${RESET}" ;;
+        *) echo "${GREEN}      Update available: $current_version -> $latest_version${RESET}" ;;
     esac
 }
 
@@ -317,10 +380,10 @@ update_geosite() {
 download_dae() {
     echo "${GREEN}[4/4] Downloading dae binary...${RESET}"
     echo "${GREEN}      URL: $dae_url${RESET}"
-    fetch "$dae_url" -o "dae-linux-${MACHINE}.zip" || \
+    download "$dae_url" "dae-linux-${MACHINE}.zip" || \
         { echo "${RED}error: dae download failed.${RESET}"; exit 1; }
     local_hash="$(SHA256SUM "dae-linux-${MACHINE}.zip")"
-    fetch "$dae_hash_url" -o "dae-linux-${MACHINE}.zip.dgst" || \
+    download "$dae_hash_url" "dae-linux-${MACHINE}.zip.dgst" || \
         { echo "${RED}error: checksum file download failed.${RESET}"
           rm -f "dae-linux-${MACHINE}.zip.dgst"; exit 1; }
     # Try matching by filename first, then fall back to line 3
@@ -552,26 +615,31 @@ installation() {
 
 should_we_install_dae() {
     check_arch
-    if [ "$force_install" = 'yes' ]; then
-        check_online_version
-        current_version='0'
-    else
-        check_local_version
-        check_online_version
-    fi
-    compare_version
+    # 不管是不是 force-install 都读真实版本：原来 force 时把 current_version 写成 '0'，
+    # 会打出 "dae is up-to-date (0)" 这种无意义输出，还会和 nightly 的 0.0.0 判等而什么都不做。
+    check_local_version
+    check_online_version
     get_download_urls
 
+    if [ "$force_install" = 'yes' ]; then
+        compare_status=2
+        echo "${GREEN}[3/4] Comparing versions...${RESET}"
+        echo "${YELLOW}      Force install: skipping the version check.${RESET}"
+    else
+        compare_version
+    fi
+
     case "$compare_status" in
-        0) echo "${GREEN}dae is up-to-date ($current_version).${RESET}"
+        0) echo "${GREEN}dae is already up to date ($current_version) — nothing to download.${RESET}"
            echo "${GREEN}Use 'force-install' to reinstall anyway.${RESET}"
-           notice_installed_tool ;;
-        1) echo "${YELLOW}Local $current_version > remote $latest_version.${RESET}"
-           echo "${GREEN}Use force-install to override.${RESET}" ;;
-        2) if [ "$current_version" = '0' ]; then
+           notice_installed_tool
+           return 0 ;;
+        2) if [ "$force_install" = 'yes' ]; then
+               echo "${GREEN}Force installing dae $latest_version...${RESET}"
+           elif [ "$current_version" = '0' ]; then
                echo "${GREEN}Installing dae $latest_version...${RESET}"
            else
-               echo "${GREEN}Upgrading dae $current_version → $latest_version...${RESET}"
+               echo "${GREEN}Updating dae $current_version → $latest_version...${RESET}"
            fi
            installation ;;
     esac
@@ -587,6 +655,7 @@ Running without a command only prints this help — nothing is installed.
 Commands:
   install                install/update dae
   install-prerelease     include pre-release versions
+  install-nightly        install the rolling nightly build (pinned "nightly" tag)
   force-install          skip version check, reinstall
   update-geoip           update GeoIP database only
   update-geosite         update GeoSite database only
@@ -620,7 +689,7 @@ if [ $# -eq 0 ]; then
 fi
 
 show_help='' error_help='' normal_install='' force_install=''
-allow_prereleases='' use_cdn=''
+allow_prereleases='' use_cdn='' use_nightly=''
 geoip_should_update='' geosite_should_update=''
 
 for arg in "$@"; do
@@ -628,6 +697,7 @@ for arg in "$@"; do
         install)                        normal_install='yes' ;;
         install-prerelease | \
         install-prereleases)            allow_prereleases='yes' ;;
+        install-nightly)                allow_prereleases='yes'; use_nightly='yes' ;;
         force-install)                  force_install='yes' ;;
         use-cdn)                        use_cdn='yes' ;;
         update-geoip)                   geoip_should_update='yes' ;;

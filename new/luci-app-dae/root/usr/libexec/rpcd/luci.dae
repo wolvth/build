@@ -79,6 +79,8 @@ get_update_channel() {
     local channel
     config_load "$NAME"
     config_get channel "config" "update_channel" "official"
+    # 旧值 third_party 已改名为 nightly（含义也从"第三方镜像"变成官方滚动 nightly）
+    [ "$channel" = "third_party" ] && channel="nightly"
     echo "$channel"
 }
 
@@ -96,13 +98,11 @@ _do_download() {
                 return 1
             fi
             ;;
-        third_party)
-            if [ -f "$THIRD_PARTY" ] && [ -x "$THIRD_PARTY" ]; then
-                sh "$THIRD_PARTY" install-nightly >> "$LOG" 2>&1
-            else
-                echo "[download] Third-party script not found: $THIRD_PARTY" >> "$LOG"
-                return 1
-            fi
+        nightly|third_party)
+            # 官方 installer 的 nightly 动作：固定 releases/tags/nightly。
+            # 想改回 /root/sh/dae/third-party.sh，把下面的 $INSTALLER 换成 $THIRD_PARTY 即可
+            # （third_party 是改名前的旧渠道值，留着兼容存量 uci）
+            sh "$INSTALLER" install-nightly >> "$LOG" 2>&1
             ;;
     esac
 }
