@@ -55,13 +55,14 @@ function setConfigDirty(v) {
 var _runStateEl = null;
 var _ctrls = null;
 var _lastRunning = false;   // 最近一次确认的状态，看门狗超时时用来恢复按钮
+var _busy = false;          // 有操作在飞：按钮归 setBusy 独占，3 秒轮询不许插手
 function setRunState(running) {
 	_lastRunning = !!running;
 	if (_runStateEl) {
 		_runStateEl.textContent = running ? _("Running") : _("Inactive");
 		_runStateEl.style.color = running ? "green" : "red";
 	}
-	if (_ctrls) {
+	if (_ctrls && !_busy) {
 		_ctrls.start.disabled   = !!running;
 		_ctrls.restart.disabled = false;   // 重启任何时候都能点，不然失败一次就永久灰着
 		_ctrls.stop.disabled    = !running;
@@ -80,10 +81,20 @@ function setBusy(text) {
 	if (_busyTimer) { clearTimeout(_busyTimer); _busyTimer = null; }
 	if (!_busyEl) return;
 
+	_busy = !!text;
 	_busyEl.textContent = text || "";
 	_busyEl.style.display = text ? "" : "none";
 
-	if (!text) return;
+	// 操作期间四个按钮全灰：只灰被点的那一个不够 —— 点 Restart 时 Stop 还能按，
+	// 两个请求会叠在一起；而且 3 秒一次的采样轮询会把按钮重新点亮（见 setRunState）。
+	if (_ctrls && text) {
+		_ctrls.start.disabled   = true;
+		_ctrls.restart.disabled = true;
+		_ctrls.stop.disabled    = true;
+		_ctrls.reload.disabled  = true;
+	}
+
+	if (!text) { setRunState(_lastRunning); return; }
 
 	_busyTimer = trackTimer(setTimeout(function() {
 		_busyTimer = null;

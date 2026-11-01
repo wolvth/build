@@ -360,11 +360,10 @@ validate_config() {
     fi
 
     tmp="/tmp/dae-validate-$$.dae"
-    if [ -n "$content" ]; then
-        printf '%s' "$content" > "$tmp"
-    else
-        cp "$CONF" "$tmp" 2>/dev/null
-    fi
+    # 空 content 就是"空配置"，直接校验空文件。
+    # 以前这里回落到 cp $CONF：编辑器空着点 Validate 会报 "Config is valid"，
+    # 实际校验的是磁盘上的旧配置，属于假阳性。
+    printf '%s' "$content" > "$tmp"
     chmod 600 "$tmp"
     out="$("$PROG" validate -c "$tmp" 2>&1)"
     rc=$?
