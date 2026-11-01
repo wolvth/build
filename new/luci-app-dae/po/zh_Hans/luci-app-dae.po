@@ -185,12 +185,6 @@ msgstr "未知错误：%s"
 msgid "Clear Log"
 msgstr "清空日志"
 
-msgid "Are you sure you want to clear the log file?"
-msgstr "确定要清空日志文件吗？"
-
-msgid "Cancel"
-msgstr "取消"
-
 msgid "Success"
 msgstr "成功"
 
@@ -202,9 +196,6 @@ msgstr "错误"
 
 msgid "Failed to clear log file: %s"
 msgstr "清空日志失败：%s"
-
-msgid "Clear"
-msgstr "清除"
 
 msgid "Scroll to tail"
 msgstr "滚到底部"
@@ -265,3 +256,6 @@ msgstr "上次更新已中断。请再点一次更新重试。"
 
 msgid "The update is still running in the background — check /var/log/dae/dae.log if it does not finish."
 msgstr "更新仍在后台进行 —— 如果长时间不结束，请查看 /var/log/dae/dae.log。"
+
+msgid "%s is still shutting down — the status will update automatically."
+msgstr "%s 仍在停止中 —— 状态会自动更新，无需刷新页面。"

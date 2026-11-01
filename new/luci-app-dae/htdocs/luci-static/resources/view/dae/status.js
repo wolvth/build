@@ -50,12 +50,11 @@ function setConfigDirty(v) {
 	_dirtyEl.style.display = v ? "" : "none";
 }
 
-// 运行状态标签 + 控制按钮，跟着实际状态走（启动成功后状态行会自己刷新，
-// 不是只在页面加载时写一次）
+// 状态行与按钮的统一出口：页面加载、轮询、操作完成都走这里
 var _runStateEl = null;
 var _ctrls = null;
 var _lastRunning = false;   // 最近一次确认的状态，看门狗超时时用来恢复按钮
-var _busy = false;          // 有操作在飞：按钮归 setBusy 独占，3 秒轮询不许插手
+var _busy = false;          // 有操作在飞：按钮归 setBusy 独占，轮询不许插手
 function setRunState(running) {
 	_lastRunning = !!running;
 	if (_runStateEl) {
@@ -70,9 +69,8 @@ function setRunState(running) {
 	}
 }
 
-// 操作进行中的内联提示（不用全屏 modal 转圈：start 的 ubus 调用本身就要
-// 跑一遍 dae validate，1~3 秒，全屏遮罩会让人以为页面卡死）
-// 带看门狗：rpcd 卡住不返回时，不能让按钮一直灰着。
+// 操作进行中的内联提示。不用全屏 modal：start 要跑一遍 dae validate（1~3 秒），
+// 遮罩像卡死。BUSY_TIMEOUT_MS 是看门狗，rpcd 不返回时强制放开按钮。
 var _busyEl = null;
 var _busyTimer = null;
 var BUSY_TIMEOUT_MS = 30000;
@@ -85,8 +83,8 @@ function setBusy(text) {
 	_busyEl.textContent = text || "";
 	_busyEl.style.display = text ? "" : "none";
 
-	// 操作期间四个按钮全灰：只灰被点的那一个不够 —— 点 Restart 时 Stop 还能按，
-	// 两个请求会叠在一起；而且 3 秒一次的采样轮询会把按钮重新点亮（见 setRunState）。
+	// 四个按钮全灰：只灰被点的那一个，点 Restart 时 Stop 还能按，请求会叠在一起。
+	// setRunState 见到 _busy 就不碰按钮，不会把它们重新点亮。
 	if (_ctrls && text) {
 		_ctrls.start.disabled   = true;
 		_ctrls.restart.disabled = true;
@@ -99,14 +97,14 @@ function setBusy(text) {
 	_busyTimer = trackTimer(setTimeout(function() {
 		_busyTimer = null;
 		setBusy("");
-		setRunState(_lastRunning);   // 恢复到操作前的状态，按钮重新可用
+		setRunState(_lastRunning);
 		ui.addTimeLimitedNotification(null,
 			E("p", _("The request timed out — reload the page to check the service state.")),
 			8000, "warning");
 	}, BUSY_TIMEOUT_MS));
 }
 
-// 版本号那一行：更新二进制之后不用整页 reload 也能刷新
+// 版本号行：更新二进制后就地刷新，不用整页 reload
 var _versionEl = null;
 function updateVersionLine(ver) {
 	if (!_versionEl) return;
@@ -130,7 +128,7 @@ var RPC = {
 		});
 	},
 	setInitAction: function(name, action) {
-		var self = this; // [FIX] 用 self 替代 bind，可读性更好
+		var self = this;
 		_setInitAction(name, action).then(function(result) {
 			self.emit("setInitAction", { result: result, action: action });
 		}).catch(function() {
@@ -139,7 +137,7 @@ var RPC = {
 	},
 };
 
-// [FIX] 全局定时器登记，页面卸载时统一清理，避免 SPA 局部渲染场景下泄漏
+// 定时器登记：页面卸载时统一清理
 var _timers = [];
 function trackTimer(t) { _timers.push(t); return t; }
 function clearAllTimers() {
@@ -151,11 +149,11 @@ function clearAllTimers() {
 }
 window.addEventListener("beforeunload", clearAllTimers);
 
-// 每个更新锁第一次被观察到的时刻：超时后重新接上轮询时接着累计，
-// 而不是每点一次就从 0:00 重来
+// 每个更新锁第一次被观察到的时刻：超时后接上轮询时接着累计，不从 0:00 重来
 var _updateStartedAt = {};
 
-// 停止后等 procd 真的把实例干掉再刷新页面，否则会刷新出一个还写着 Running 的页面。
+// 停服后确认进程真的没了：最多 3 次（0.5s / 1.5s / 2.5s）。
+// 回调参数 true=确认停了，false=还在退（实测本机 0.82s 翻转，余量够）。
 function waitUntilStopped(callback) {
 	var maxAttempts = 3;
 	var attempt = 0;
@@ -176,15 +174,10 @@ function waitUntilStopped(callback) {
 	trackTimer(setTimeout(check, 500));
 }
 
-// 启动后确认进程是否真的在跑。
-// 不能看 /etc/init.d/dae 的返回值：rc.common 的 start() 是
-//
-//	start() { rc_procd start_service "$@"; if eval "type service_started" ...; then ...; fi }
-//
-// start_service 里的 return 1 被那个 if 吞掉了（条件为假且无 else，if 整体返回 0），
-// 所以 init 脚本永远返回 0，rpcd 的 {"result": false} 永远不会出现。
-// 只能回到"看 running"这条路上来。ubus 调用返回时 validate 和 procd 拉起都已完成，
-// 所以这里查一次基本就能定论，再补一次 1 秒后的复查兜住极慢的情况。
+// 启动后确认进程真的在跑。
+// 不能看 init 脚本的返回值：rc.common 的 start() 用 if 包住 start_service，
+// 里面的 return 1 被吞掉（条件假且无 else → 整体 0），所以永远返回成功。
+// ubus 返回时 validate 和 procd 拉起都已完成，查一次基本能定论，再补 1 秒复查。
 function confirmRunning(callback) {
 	L.resolveDefault(getInitStatus(NAME), {}).then(function(d) {
 		var st = d && d[NAME];
@@ -200,13 +193,12 @@ function confirmRunning(callback) {
 }
 
 // ── 启动/重启失败：把原因留在屏幕上 ──────────────────────────
-// 原实现先弹通知再 location.reload()，通知连一帧都渲染不出来
+// START_FAIL_LINES：弹窗里显示的日志行数（取尾部，最新的在最上面）
 var START_FAIL_LINES = 12;
 
 function showStartFailure(action) {
 	return fs.read_direct('/var/log/dae/dae.log').catch(function() { return ''; }).then(function(txt) {
-		// 只取最后几行、最新的排在前面：启动失败真正有用的通常就是最后一条。
-		// 这个片段只在这里用，Log 标签页是独立的一套渲染（log.js）
+		// 只取尾部、最新的一行在最上面：启动失败真正有用的一般就是最后一条
 		var lines = (txt || '').replace(/\u0000+/g, '').split('\n')
 			.filter(function(l) { return l.trim() !== ''; });
 		var snippet = lines.slice(-START_FAIL_LINES).reverse().join('\n');
@@ -226,7 +218,6 @@ function showStartFailure(action) {
 				])
 				: E('p', {}, _('No log output.')),
 			E('div', { class: 'right' }, [
-				// 只留关闭：状态行和按钮已经就地修正，不需要再整页刷新一次
 				E('button', { class: 'btn cbi-button cbi-button-action', click: ui.hideModal }, _('Close'))
 			])
 		]);
@@ -237,20 +228,20 @@ RPC.on("setInitAction", function(reply) {
 	var action = reply && reply.action;
 
 	if (action === "start" || action === "restart") {
-		// 不看 reply.result：init 脚本永远返回 0（见 confirmRunning 里的说明），
-		// 只能等 ubus 调用返回后再确认进程是否真的起来了。
+		// 不看 reply.result（init 永远返回 0，见 confirmRunning），只认进程
 		confirmRunning(function(ok, st) {
 			setBusy("");
-			// st 为 null 表示状态拿不到（rpc 抖动/超时）。这时既不能报失败，
-			// 也不能把状态行改成 Running —— 恢复成操作前的状态，让用户自己刷新确认。
+			// st 为 null = 状态拿不到（rpc 抖动）。既不报失败也不写 Running，
+			// 恢复成操作前的样子 —— 不恢复的话按钮会一直灰着。
 			if (st === null) {
-				setRunState(_lastRunning);   // 关键：不恢复的话 Start 按钮会一直灰着
+				setRunState(_lastRunning);
 				ui.addTimeLimitedNotification(null,
 					E("p", _("Could not confirm the dae state — reload the page to check.")), 8000, "warning");
 				return;
 			}
 			if (ok) {
 				applyRunning(true, st);   // 就地更新（含版本号），不整页 reload
+				setConfigDirty(false);    // 起来了就说明配置已生效，清掉"未应用"角标
 				return;
 			}
 			showStartFailure(action);   // honk 冲突 / uci 禁用 / validate 不过 / 秒崩
@@ -259,7 +250,20 @@ RPC.on("setInitAction", function(reply) {
 	}
 
 	if (action === "stop") {
-		waitUntilStopped(function() { setBusy(""); applyRunning(false); });
+		// 只有确认停了才切 Inactive；没确认就保持 Running —— 那是事实，不是猜测。
+		waitUntilStopped(function(stopped) {
+			setBusy("");               // 清 busy 并按 _lastRunning 还原按钮
+			if (stopped) {
+				applyRunning(false);   // 真停了：切 Inactive，停掉采样
+				return;
+			}
+			// 假停（还在退）：保住采样，它会在进程真死后的下一个 3 秒 tick 收尾
+			if (statsPoller.el && !statsPoller.timer)
+				statsPoller.start(statsPoller.el);
+			ui.addTimeLimitedNotification(null,
+				E("p", _("%s is still shutting down — the status will update automatically.").format(NAME)),
+				5000, "info");
+		});
 		return;
 	}
 
@@ -288,7 +292,7 @@ var statsPoller = {
 		}
 		tick();
 		this.timer = setInterval(tick, 3000);
-		trackTimer(this.timer); // [FIX] 登记，卸载时清理
+		trackTimer(this.timer);
 	},
 
 	stop: function() {
@@ -301,12 +305,12 @@ var statsPoller = {
 		if (!s || typeof s.running === "undefined") return;
 
 		var running = (s.running === true || s.running === 1);
-		setRunState(running);   // 状态行和按钮跟着实际状态走
+		setRunState(running);
 
 		if (!running) {
 			this.el.textContent = '';
 			this.prev = null;
-			this.stop();   // dae 已经停了，别再每 3 秒去问一次；刷新页面后会重新开始
+			this.stop();   // 已停就别再每 3 秒问一次，重新 Start 时 applyRunning 会拉起来
 			return;
 		}
 
@@ -337,9 +341,8 @@ var statsPoller = {
 	}
 };
 
-// 就地切换运行状态：不整页 reload，避免刷新卡顿（页面上的其它内容本来就不会变）
-// st 是 confirmRunning 顺手带回来的状态，用它把版本号也一并刷新 —— 版本号现在有
-// mtime 缓存，取一次只是一个 cat，不用为了它去 reload 整页。
+// 就地切换运行状态，不整页 reload。st 是 confirmRunning 顺带回来的状态，
+// 顺手把版本号也刷新（后端有 mtime 缓存，取一次只是一次 cat）。
 function applyRunning(running, st) {
 	setRunState(running);
 	if (running) {
@@ -352,7 +355,7 @@ function applyRunning(running, st) {
 }
 
 function formatMem(kb, mb) {
-	// [FIX] 用 parseFloat，避免 mb=0.5 被 parseInt 截断为 0 而误走 KB 分支
+	// parseFloat：mb 可能是 0.5，parseInt 会截成 0 而误走 KB 分支
 	if (mb && parseFloat(mb) > 0) return mb + ' MB';
 	if (kb && parseInt(kb) > 0) return kb + ' KB';
 	return '0 MB';
@@ -362,7 +365,7 @@ function formatMem(kb, mb) {
 var statusWidget = baseclass.extend({
 	render: function() {
 		// 区分"调用失败"和"字段为空"：resolveDefault 会把错误吞成 {}，
-		// 结果就是后端挂了却显示成"没装 dae"，还带一个 null
+		// 那样后端挂了会显示成"没装 dae"
 		function settle(promise) {
 			return promise.then(
 				function(value) { return { ok: true, value: value }; },
@@ -405,12 +408,12 @@ var statusWidget = baseclass.extend({
 			_lastRunning = !!s.running;
 
 			var statsInline = E("span", { style: "font-size:.85em;color:var(--color-text-secondary, #888)" }, "");
-			// 无论当前是否在跑都记住这个节点：页面是"停着"加载的话，
-			// 之后点 Start 成功后要能直接把采样挂上去（applyRunning → statsPoller.start）
+			// 不管当前是否在跑都记住这个节点：停着加载时点 Start 成功，
+			// 要靠它把采样挂上去（applyRunning → statsPoller.start）
 			statsPoller.el = statsInline;
 			if (s.running) statsPoller.start(statsInline);
 
-			// 操作进行中的内联提示（替代原来的全屏转圈）
+			// 操作进行中的内联提示
 			var busyEl = E("span", {
 				style: "display:none;margin-left:8px;font-size:.85em;color:#e67e22"
 			}, "");
@@ -519,7 +522,7 @@ var statusWidget = baseclass.extend({
 				class: "cbi-input-select",
 				style: "width:165px;padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-size:.9em;",
 				change: function(ev) {
-					// [FIX] 防连点：请求期间 disable 下拉框
+					// 防连点：请求期间禁用下拉框
 					var sel = ev.target;
 					var newChannel = sel.value;
 					sel.disabled = true;
@@ -551,7 +554,7 @@ var statusWidget = baseclass.extend({
 				E("div", { class: "cbi-value-field" }, [channelSelect]),
 			]);
 
-			// [FIX] geoDateEl 提前声明，避免 startPolling 闭包引用时依赖声明顺序
+			// 先声明：startPolling 的闭包要引用它
 			var geoDateEl = E("span", { style: "font-size:.85em;color:#888" }, "");
 			var geoTs = Math.min(s.geoip_mtime || 0, s.geosite_mtime || 0);
 			if (geoTs) geoDateEl.textContent = _("Updated: %s").format(fmtDate(geoTs));
@@ -571,8 +574,8 @@ var statusWidget = baseclass.extend({
 				if (!_updateStartedAt[lockField]) _updateStartedAt[lockField] = Date.now();
 				var started = _updateStartedAt[lockField];
 				var attempt = 0;
-				// 5 分钟只是"这个按钮还转不转"的上限，不是更新本身的时限 ——
-				// 后端弱网下可能跑得更久，到点只是把按钮放开，更新照常继续。
+				// 100 × 3s = 5 分钟，只是"按钮还转不转"的上限，不是更新时限。
+				// 弱网下后端可能跑更久，到点只放开按钮，更新照常继续。
 				var maxAttempts = 100;
 				var staleField = lockField === "dae_updating" ? "dae_update_stale" : "geo_update_stale";
 
@@ -582,7 +585,7 @@ var statusWidget = baseclass.extend({
 						Math.floor(sec / 60) + ":" + ("0" + (sec % 60)).slice(-2);
 				}
 
-				// clearStart=false 时保留起始时间：超时后再点一次，计时接着走而不是从 0 开始
+				// clearStart=false 保留起始时间：超时后再点，计时接着走
 				function stopPolling(clearStart) {
 					clearInterval(timer);
 					if (clearStart) delete _updateStartedAt[lockField];
@@ -598,8 +601,8 @@ var statusWidget = baseclass.extend({
 					getInitStatus(NAME).then(function(d) {
 						var st = (d && d[NAME]) || {};
 
-						// 后端判定"上次更新被中断"（锁还在、进程已经没了）。
-						// 既不算成功也不算失败；锁留给下次点更新时由后端接管清理。
+						// 后端判定"上次更新被中断"（锁在、进程没了）：既不算成功也不算失败，
+						// 锁留给下次点更新时由后端接管清理。
 						if (st[staleField]) {
 							stopPolling(true);
 							ui.addTimeLimitedNotification(null,
@@ -622,8 +625,8 @@ var statusWidget = baseclass.extend({
 								ui.addTimeLimitedNotification(null, E("p", "\u2713 " + doneMsg), 5000, "info");
 							}
 						} else if (attempt >= maxAttempts) {
-							// 锁还在 = 后端确实还在跑，只是超过 5 分钟。放开按钮，
-							// 再点一次会走"已在更新中"分支接上轮询，不会重复下载。
+							// 锁还在 = 后端确实还在跑，只是超了 5 分钟。放开按钮，
+							// 再点会走"已在更新中"分支接上轮询，不会重复下载。
 							stopPolling(false);
 							ui.addTimeLimitedNotification(null,
 								E("p", "\u26a0 " + _("The update is still running in the background \u2014 check /var/log/dae/dae.log if it does not finish.")), 8000, "warning");
@@ -637,11 +640,11 @@ var statusWidget = baseclass.extend({
 						}
 					});
 				}, 3000);
-				trackTimer(timer); // [FIX] 登记
+				trackTimer(timer);
 			}
 
 			function updBtn(label, action, lockField, active) {
-				// 不再留 margin：空 span 也会把两个按钮撑开，间距统一交给 flex 的 gap
+				// 不留 margin：空 span 也会把按钮撑开，间距交给 flex 的 gap
 				var statusEl = E("span", { style: "font-size:.85em;color:#888" }, "");
 				var btn = E("button", {
 					class: "btn cbi-button cbi-button-action",
@@ -650,8 +653,8 @@ var statusWidget = baseclass.extend({
 						_setInitAction(NAME, action).then(function(res) {
 							var ok = (res && typeof res === 'object') ? res.result : res;
 							if (!ok) {
-								// 已有更新在跑（比如界面超时后又点了一次）：接上轮询继续看，
-								// 而不是只弹一句"正在进行中"然后什么都没发生
+								// 已有更新在跑（界面超时后又点了一次）：接上轮询继续看，
+								// 而不是只弹一句"正在进行中"就完事
 								ui.addTimeLimitedNotification(null, E("p", _("Update is already in progress.")), 8000, "warning");
 								startPolling(statusEl, btn, lockField,
 									action === "update" ? _("dae updated") : _("Geo databases updated"));
@@ -685,7 +688,7 @@ var statusWidget = baseclass.extend({
 					"\u2717 " + _("Last update failed (%s) \u2014 see /var/log/dae/dae.log").format(which.join(" / ")));
 			}
 
-			// 两个更新按钮用和上排一致的 10px 间距（原来是一串 &nbsp;，太散）
+			// 和上排一致的 10px 间距，由 .dae-ctrl 的 flex gap 提供
 			var updCtrlChildren = [
 				updBtn(_("Update dae"), "update",     "dae_updating", s.dae_updating),
 				updBtn(_("Update Geo"), "update_geo", "geo_updating", s.geo_updating),
@@ -715,8 +718,8 @@ var statusWidget = baseclass.extend({
 			var btn_start = E("button", {
 				class: "btn cbi-button cbi-button-positive", disabled: true,
 				click: function() {
-					// 不用全屏 modal：这个 ubus 调用要跑一遍 dae validate，
-					// 1~3 秒，遮罩会让人以为页面卡死。改成按钮置灰 + 状态行内联提示。
+					// 不用全屏 modal：这个调用要跑 dae validate（1~3 秒），遮罩像卡死。
+					// 改成按钮置灰 + 状态行内联提示。
 					btn_start.disabled = true;
 					setBusy(_("Starting %s...").format(NAME));
 					RPC.setInitAction(NAME, "start");
@@ -768,8 +771,7 @@ var statusWidget = baseclass.extend({
 			});
 			autoChk.checked = !!s.enabled;
 
-			// 文案在左、拨杆在右；整块是 label，点文字也能切换
-			// msgid 用英文，中文由 po/zh_Hans/luci-app-dae.po 提供
+			// 整块是 label，点文字也能切换；msgid 用英文，中文在 po/zh_Hans
 			var autoSwitch = E("label", { class: "dae-auto", title: _("Autostart") }, [
 				E("span", { class: "dae-switch-text" }, _("Autostart")),
 				E("span", { class: "dae-switch" }, [
@@ -778,7 +780,7 @@ var statusWidget = baseclass.extend({
 				]),
 			]);
 
-			// 热加载：走 init.d 的 hot_reload → dae reload <pid>，不断连接
+			// 热加载：init.d hot_reload → dae reload（SIGUSR1），不断连接
 			var btn_reload = E("button", {
 				class: "btn cbi-button cbi-button-action",
 				click: function() {

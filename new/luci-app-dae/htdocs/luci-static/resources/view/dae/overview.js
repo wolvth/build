@@ -12,8 +12,8 @@
 const NAME = "dae";
 const CONF = "/etc/dae/config.dae";
 
-// CodeMirror resource paths —— 用 L.resource() 而不是写死 /luci-static/，
-// LuCI 部署在子路径（反代 /luci/）时写死的路径会 404，编辑器静默退化成 textarea
+// 用 L.resource() 而不是写死 /luci-static/：LuCI 部署在子路径（反代 /luci/）时
+// 写死的路径会 404，编辑器静默退化成 textarea
 const CM_CSS = [
 	L.resource('dae/lib/codemirror.css'),
 	L.resource('dae/addon/fold/foldgutter.css'),
@@ -35,7 +35,7 @@ var validateConfig = rpc.declare({
 	params: ["content"],
 });
 
-// Global editor ref
+// 当前 CodeMirror 实例
 var _cmEditor = null;
 
 // 加载配置失败时记下来，保存前拦一道（避免把读不到的配置覆盖成空文件）
@@ -64,8 +64,7 @@ function loadScript(url) {
 }
 
 function loadCodeMirror() {
-	// CSS 并行；脚本先加载 core，再并行加载 addon（原来 9 个资源全串行）
-	// addon 失败不阻塞编辑器：少一个 addon 只是少一个功能
+	// CSS 并行；脚本先加载 core 再并行加载 addon。addon 失败不阻塞编辑器
 	return Promise.all(CM_CSS.map(loadStyle)).then(function() {
 		return loadScript(CM_SCRIPTS[0]);
 	}).then(function() {
@@ -203,9 +202,8 @@ return view.extend({
 		o.rows = 32;
 		o.load = function(section_id) {
 			return fs.read_direct(CONF).catch(function(err) {
-				// 文件不存在是正常情况（首次安装，还没建配置），当空内容处理；
-				// 其它错误（权限、IO）不能静默变成空 —— 否则用户看到空白编辑器，
-				// 一保存就把原来的 config.dae 覆盖成空文件。
+				// 文件不存在 = 首次安装，当空内容处理；其它错误（权限、IO）不能静默变成空，
+				// 否则用户看到空白编辑器，一保存就把原来的 config.dae 覆盖成空文件。
 				if (String(err).indexOf('NotFoundError') >= 0)
 					return '';
 
@@ -246,8 +244,7 @@ return view.extend({
 			return Promise.resolve(false);
 		}
 
-		// 空配置 dae 一定不接受（validate 会报 "section global is required"），
-		// 拦在写盘之前，否则要等到下次启动才发现配置已经写坏了
+		// 空配置 dae 一定不接受（validate 报 "section global is required"），拦在写盘之前
 		var current = _cmEditor
 			? _cmEditor.getValue()
 			: ((document.querySelector('#view textarea') || {}).value || '');

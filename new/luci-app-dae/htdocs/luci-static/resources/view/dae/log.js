@@ -143,7 +143,6 @@ return baseclass.extend({
   } \
 }';
 
-        // ★★★ 修改后的 loading 图标（使用 LuCI 内置 spinning 动画）★★★
         var log_textarea = E('div', { 'id': 'log_textarea' },
             E('span', { 'class': 'spinning', 'style': 'margin-right: 6px;' }, ''),
             _('Collecting data…')
@@ -154,7 +153,7 @@ return baseclass.extend({
                 return c === '<' ? '&lt;' : (c === '>' ? '&gt;' : '&amp;');
             });
 
-            // 一趟扫完：关键字 / IP，替代原来的 4 趟 replace
+            // 一趟扫完：关键字 / IP
             return '<div class="log-container">' + line.replace(
                 /\b(error|failed|warn(?:ing)?|info|debug|outbound)\b|\b(\d{1,3}(?:\.\d{1,3}){3})\b/gi,
                 function (m, kw, ip) {
@@ -187,8 +186,7 @@ return baseclass.extend({
             };
         }
 
-        // 只在文本节点上加高亮。原来直接对 HTML 字符串做 replace，
-        // 连 <span class="log-error"> 里的 class 一起替换，标签会被打碎
+        // 只在文本节点上加高亮：直接 replace HTML 会把 <span class="log-error"> 的标签打碎
         function highlightElement(rootEl, filter) {
             var walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null);
             var nodes = [];
@@ -233,8 +231,7 @@ return baseclass.extend({
                 originalLogContent = formattedContent;
                 logEntriesCache = null;
 
-                // 重建 DOM 会把 scrollTop 打回 0；按新增行的高度补偿，
-                // 这样往下翻看旧日志时不会被每 5 秒拉回顶部
+                // 重建 DOM 会把 scrollTop 打回 0，按新增高度补偿，翻旧日志时不被拉回顶部
                 var keepTop = log_textarea.scrollTop;
                 var prevHeight = log_textarea.scrollHeight;
 
@@ -331,31 +328,20 @@ return baseclass.extend({
             });
         }
 
+        // 点了就清，不弹确认：清日志是排查时的高频动作，成功/失败都有 toast
         function clearLog() {
-            return ui.showModal(_('Clear Log'), [
-                E('p', {}, _('Are you sure you want to clear the log file?')),
-                E('div', { class: 'right' }, [
-                    E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')),
-                    E('button', {
-                        'class': 'cbi-button cbi-button-positive important',
-                        'click': function () {
-                            ui.hideModal();
-                            fs.write(LOG, '').then(function () {
-                                ui.addTimeLimitedNotification(_('Success'), _('Log file has been cleared.'), 5000, 'success');
-                                var logContainer = document.getElementById('log_textarea');
-                                var preElem = logContainer.querySelector('pre');
-                                if (preElem) {
-                                    preElem.innerHTML = _('Log is empty.');
-                                    logEntriesCache = null;
-                                    originalLogContent = '';
-                                }
-                            }).catch(function (error) {
-                                ui.addTimeLimitedNotification(_('Error'), _('Failed to clear log file: %s').format(error), 8000, 'error');
-                            });
-                        }
-                    }, _('Clear'))
-                ])
-            ]);
+            return fs.write(LOG, '').then(function () {
+                ui.addTimeLimitedNotification(_('Success'), _('Log file has been cleared.'), 5000, 'success');
+                var logContainer = document.getElementById('log_textarea');
+                var preElem = logContainer.querySelector('pre');
+                if (preElem) {
+                    preElem.innerHTML = _('Log is empty.');
+                    logEntriesCache = null;
+                    originalLogContent = '';
+                }
+            }).catch(function (error) {
+                ui.addTimeLimitedNotification(_('Error'), _('Failed to clear log file: %s').format(error), 8000, 'error');
+            });
         }
 
         var scrollDownButton = E('button', { 'id': 'scrollDownButton', 'class': 'cbi-button cbi-button-neutral' }, _('Scroll to tail'));

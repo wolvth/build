@@ -3,6 +3,7 @@
 
 USE_PROCD=1
 START=99
+STOP=01
 
 extra_command "hot_reload" "Hot-reload service"
 
@@ -22,6 +23,12 @@ ensure_uci_config() {
 	fi
 }
 
+# 失败原因要同时进 syslog 和 dae.log —— LuCI 的"启动失败"弹窗读的是 dae.log
+init_log() {
+	logger -t dae "$1"
+	printf '[%s] [init] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG"
+}
+
 start_service() {
     ensure_uci_config
     config_load $NAME
@@ -30,18 +37,26 @@ start_service() {
 	local enabled
 	config_get_bool enabled "config" "enabled" "0"
 	if [ "$enabled" -ne 1 ]; then
-		msg="dae is disabled by uci (dae.config.enabled=0), start skipped; enable it with: uci set dae.config.enabled=1 && uci commit dae"
-		logger -t dae "$msg"
-		printf '[%s] [init] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$msg" >> "$LOG"
+		init_log "dae is disabled by uci (dae.config.enabled=0), start skipped; enable it with: uci set dae.config.enabled=1 && uci commit dae"
 		return 1
 	fi
 
 	if [ "$(uci -q get honk.config.enabled)" = 1 ] &&
 		ubus call service list '{"name":"honk"}' 2>/dev/null |
 		jsonfilter -q -e '@.honk.instances[*].running' | grep -q true; then
-                msg="honk is running; dae and honk cannot run at the same time, disable honk first"
-                logger -t dae "$msg"
-                printf '[%s] [init] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$msg" >> "$LOG"
+                init_log "honk is running; dae and honk cannot run at the same time, disable honk first"
+		return 1
+	fi
+
+	# 配置缺失/不可读时说清原因，别等 dae validate 报 "section global is required"
+	if [ ! -r "$CONF" ]; then
+		init_log "configuration file '$CONF' is missing or unreadable"
+		return 1
+	fi
+
+	# 没有 BTF 时 dae 加载 eBPF 会报一堆难懂的错误，先挡一道（同官方 dae.init）
+	if [ ! -e /sys/kernel/btf/vmlinux ] && [ ! -e "/usr/lib/debug/boot/vmlinux-$(uname -r)" ]; then
+		init_log "the kernel has no BTF: run 'apk update && apk upgrade vmlinux-btf-builtin'"
 		return 1
 	fi
 
@@ -68,6 +83,28 @@ start_service() {
 
 service_triggers() {
 	procd_add_reload_trigger "$NAME"
+}
+
+# 不定义 reload_service 时，rc.common 的 reload 退化成 start：跑一遍 validate 但
+# dae 不重读配置（只认 SIGUSR1），且配置非法时 start_service 不加实例 = procd 停服务。
+# 做法同官方 dae.init，只多一道 validate —— 配置写坏了就别发信号，让旧实例继续跑。
+reload_service() {
+	config_load "$NAME"
+
+	local enabled
+	config_get_bool enabled "config" "enabled" 0
+	if [ "$enabled" -ne 1 ] || ! procd_running "$NAME" "$NAME"; then
+		start
+		return
+	fi
+
+	if ! "$PROG" validate -c "$CONF" >> "$LOG" 2>&1; then
+		init_log "reload skipped: configuration '$CONF' failed validation"
+		return 1
+	fi
+
+	# dae 收 SIGUSR1 重读配置并保持已建连接（`dae reload` 发的就是它）
+	procd_send_signal "$NAME" "$NAME" USR1
 }
 
 hot_reload() {

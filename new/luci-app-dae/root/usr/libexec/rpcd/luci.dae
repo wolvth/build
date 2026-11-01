@@ -15,8 +15,8 @@ readonly GEOIP="/usr/share/dae/geoip.dat"
 readonly GEOSITE="/usr/share/dae/geosite.dat"
 readonly DAE_FAIL="${DAE_LOCK}.failed"
 readonly GEO_FAIL="${GEO_LOCK}.failed"
-# 更新进程的 PID。只读接口靠 kill -0 判断更新是否还活着 —— 扫 /proc 太贵
-# （212 个进程逐个 grep，实测约 400ms），每 3 秒轮询一次扛不住。
+# 更新进程的 PID：只读接口用 kill -0 判活。扫 /proc 要 400ms（212 个进程逐个 grep），
+# 每 3 秒轮询一次扛不住。
 readonly DAE_PID="${DAE_LOCK}.pid"
 readonly GEO_PID="${GEO_LOCK}.pid"
 readonly VER_CACHE="/var/run/dae.version"
@@ -55,9 +55,8 @@ is_running() {
     [ "$(ubus call service list "{ 'name': '$1' }" | \
         jsonfilter -q -e "@['$1'].instances[*].running" | head -1)" = 'true' ]
 }
-# 版本号带缓存：dae --version 要 exec 一个 33MB 的 Go 二进制（几十到几百毫秒），
-# 而 getInitStatus 每次打开页面都会调。缓存放 /var/run（tmpfs），重启即失效；
-# 用二进制 mtime 当校验键 —— 二进制被更新或替换后自动重探，不会读到旧版本。
+# 版本号缓存：dae --version 要 exec 一个 33MB 的二进制，而每次开页面都会调。
+# 缓存放 /var/run（tmpfs），以二进制 mtime 为键 —— 换过二进制自动重探。
 get_version() {
     [ -x "$PROG" ] || return 0
 
@@ -119,10 +118,10 @@ update_proc_alive() {
     return 1
 }
 
-# 锁还在、但锁里记的进程已经没了 → 更新其实已经中断（OOM / rpcd 重启 / 手动 kill）。
-# 这里只做判断，**不删锁**：删锁留给下一次 update 调用去做，那条路径是单线程的，
-# 不会和正在跑的更新并发。所以误判的后果只是"多说一句已中断"，不会跑出两份更新。
-# 刚建的锁（10 秒内）一律当作还活着，避开"锁已 touch、PID 还没写进去"的那一瞬间。
+# 锁在、但锁里记的进程没了 → 更新已中断（OOM / rpcd 重启 / 手动 kill）。
+# 只判断**不删锁**：删锁留给下一次 update 调用（单线程，不会并发）。
+# 所以误判的后果只是"多说一句已中断"，不会跑出两份更新。
+# 10 秒内的新锁一律当还活着，避开"锁已 touch、PID 还没写进去"的瞬间。
 lock_stale() {
     local lock="$1" pidfile="$2" mt age pid
     [ -f "$lock" ] || return 1
@@ -235,9 +234,8 @@ get_init_status() {
     json_add_string 'version' "$version"
     json_add_string 'update_channel' "$channel"
 
-    # 锁在 + 进程活着 = 真的在更新；锁在但进程没了 = 上次更新被中断（stale）。
-    # stale 时把 updating 报成 false，界面才会停止轮询并恢复按钮；
-    # 锁本身留着，等下一次点更新时由 update 分支接管清理。
+    # 锁在 + 进程活着 = 真在更新；锁在但进程没了 = 上次被中断（stale）。
+    # stale 时报 updating=false，界面才会停轮询、恢复按钮；锁留着给下次 update 接管。
     local dae_stale=0 geo_stale=0
     lock_stale "$DAE_LOCK" "$DAE_PID" && dae_stale=1
     lock_stale "$GEO_LOCK" "$GEO_PID" && geo_stale=1
@@ -295,7 +293,7 @@ set_init_action() {
             fi
             print_json_bool "result" "1"
             ;;
-        # ---注释掉hot_reload行 就只保存配置，不reload ---
+        # 注释掉下面的 hot_reload 调用，就只保存配置、不重载
         reload_config)
             # 热加载失败要如实返回，否则界面会提示"已热加载"而 dae 其实没动
             if /etc/init.d/dae hot_reload >/dev/null 2>&1; then
@@ -360,9 +358,8 @@ validate_config() {
     fi
 
     tmp="/tmp/dae-validate-$$.dae"
-    # 空 content 就是"空配置"，直接校验空文件。
-    # 以前这里回落到 cp $CONF：编辑器空着点 Validate 会报 "Config is valid"，
-    # 实际校验的是磁盘上的旧配置，属于假阳性。
+    # 空 content 就按空配置校验。不能回落到 cp $CONF —— 那样编辑器空着点 Validate
+    # 会报 "Config is valid"，实际验的是磁盘上的旧配置。
     printf '%s' "$content" > "$tmp"
     chmod 600 "$tmp"
     out="$("$PROG" validate -c "$tmp" 2>&1)"

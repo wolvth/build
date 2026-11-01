@@ -128,7 +128,6 @@ check_arch() {
 # POSIX version compare — no sort -V (not in busybox)
 # Returns: 0=equal  1=$1>$2  2=$1<$2
 ver_compare() {
-    # Returns: 0=equal  1=$1>$2  2=$1<$2
     [ "$1" = "$2" ] && { echo 0; return; }
 
     # dev/unstable builds always older than any proper release
