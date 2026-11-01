@@ -293,7 +293,8 @@ set_init_action() {
             fi
             print_json_bool "result" "1"
             ;;
-        # 注释掉下面的 hot_reload 调用，就只保存配置、不重载
+        # 只做热重载。保存是前端 fs.write 直接写 /etc/dae/config.dae，不经过这里，
+        # 所以"只保存不重载"就是点 Save（Save 本来就不 reload），别靠注释这行来关。
         reload_config)
             # 热加载失败要如实返回，否则界面会提示"已热加载"而 dae 其实没动
             if /etc/init.d/dae hot_reload >/dev/null 2>&1; then
