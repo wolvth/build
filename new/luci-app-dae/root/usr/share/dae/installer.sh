@@ -52,8 +52,23 @@ SHA256SUM() {
 # --speed-time/--speed-limit：30 秒内速度低于 1KB/s 判定死链，立刻结束本次尝试
 # 进入重试（配合 -C - 续传），而不是干等 300s 的 max-time 超时。
 CURL_OPTS='-fsSL --connect-timeout 15 --max-time 300 --retry 2 --retry-delay 2 -C - --speed-time 30 --speed-limit 1024'
+
+# 单次 curl 的上限是 904s（--max-time 300 × 3 次尝试），而一次更新最多串
+# 二进制 2 次 + geoip 4 次 + geosite 4 次，叠起来最坏 2.5 小时，更新锁一直被占着。
+# 这里给每个"下载目标"设总预算：用完就放弃，宁可这次不更新，也不让界面卡在"更新中"。
+# 预算模式下关闭 curl 内部重试（--retry 0）——换源本身就是重试，否则
+# "预算 600s" 会被 curl 自己的 3 次尝试撑回 904s，预算就形同虚设。
+DAE_DOWNLOAD_BUDGET=1200   # dae 二进制：直连 + CDN 回退共用
+GEO_DOWNLOAD_BUDGET=600    # 单个 geo 资产：所有源（含校验）共用
+
 fetch() {
-    curl $CURL_OPTS "$@"
+    # 预算控制：调用方设 _FETCH_MAX_TIME，函数读完即清，避免泄漏到下一次调用
+    if [ -n "$_FETCH_MAX_TIME" ]; then
+        curl $CURL_OPTS --max-time "$_FETCH_MAX_TIME" "$@"
+        _FETCH_MAX_TIME=''
+    else
+        curl $CURL_OPTS "$@"
+    fi
 }
 
 # 非致命的小文件（示例配置、shell 补全）不占 300s 的预算：
@@ -116,6 +131,18 @@ fetch_progress() {
     _fp_out="$2"
     shift 2
 
+    # 预算控制：调用方设 _FP_MAX_TIME（本次最多多少秒）和 _FP_NO_RETRY，
+    # 函数读完立即清空，避免泄漏到下一次调用
+    _fp_opts="$CURL_OPTS"
+    if [ -n "$_FP_MAX_TIME" ]; then
+        _fp_opts="$_fp_opts --max-time $_FP_MAX_TIME"
+        _FP_MAX_TIME=''
+    fi
+    if [ -n "$_FP_NO_RETRY" ]; then
+        _fp_opts="$_fp_opts --retry 0"
+        _FP_NO_RETRY=''
+    fi
+
     _fp_total="$(probe_size "$_fp_url")"
     if [ -z "$_fp_total" ] || [ "$_fp_total" -le 0 ] 2>/dev/null; then
         _fp_total=''
@@ -124,7 +151,7 @@ fetch_progress() {
     _fp_t0="$(date +%s)"
     _fp_prev=0
     _fp_stall=0
-    curl $CURL_OPTS "$@" "$_fp_url" -o "$_fp_out" &
+    curl $_fp_opts "$@" "$_fp_url" -o "$_fp_out" &
     _fp_pid=$!
 
     while kill -0 "$_fp_pid" 2>/dev/null; do
@@ -187,13 +214,25 @@ CDN_PREFIX='https://github.abskoop.workers.dev/'
 download() {
     _dl_url="$1"
     _dl_out="$2"
+    _dl_deadline=$(( $(date +%s) + DAE_DOWNLOAD_BUDGET ))
+
+    _dl_left=$(( _dl_deadline - $(date +%s) ))
+    _FP_MAX_TIME="$_dl_left"
+    _FP_NO_RETRY=1
     fetch_progress "$_dl_url" "$_dl_out" && return 0
 
     case "$_dl_url" in
         https://github.com/*)
             [ "$use_cdn" = 'yes' ] && return 1
+            _dl_left=$(( _dl_deadline - $(date +%s) ))
+            if [ "$_dl_left" -le 0 ]; then
+                echo "${RED}error: dae download budget (${DAE_DOWNLOAD_BUDGET}s) exhausted before CDN fallback${RESET}"
+                return 1
+            fi
             echo "${YELLOW}warning: direct download failed, retrying via CDN${RESET}"
             rm -f "$_dl_out"          # 代理不一定支持 Range，别拿半截文件续传
+            _FP_MAX_TIME="$_dl_left"
+            _FP_NO_RETRY=1
             fetch_progress "${CDN_PREFIX}${_dl_url}" "$_dl_out" && return 0
             ;;
     esac
@@ -429,14 +468,29 @@ download_geo_asset() {
     _geo_dir="$2"
     shift 2
     _geo_file="$_geo_dir/${_geo_name}.dat"
+    _geo_deadline=$(( $(date +%s) + GEO_DOWNLOAD_BUDGET ))
 
     for _geo_url in "$@"; do
+        _geo_left=$(( _geo_deadline - $(date +%s) ))
+        if [ "$_geo_left" -le 0 ]; then
+            echo "${RED}error: ${_geo_name} download budget (${GEO_DOWNLOAD_BUDGET}s) exhausted${RESET}"
+            break
+        fi
         echo "${GREEN}Downloading ${_geo_name} from: $_geo_url${RESET}"
+        _FP_MAX_TIME="$_geo_left"
+        _FP_NO_RETRY=1
         if ! fetch_progress "$_geo_url" "$_geo_file"; then
             echo "${YELLOW}warning: ${_geo_name} download failed, trying the next source${RESET}"
             rm -f "$_geo_file" "${_geo_file}.sha256sum"
             continue
         fi
+        _geo_left=$(( _geo_deadline - $(date +%s) ))
+        if [ "$_geo_left" -le 0 ]; then
+            echo "${RED}error: ${_geo_name} download budget exhausted before checksum${RESET}"
+            rm -f "$_geo_file"
+            break
+        fi
+        _FETCH_MAX_TIME="$_geo_left"
         if ! fetch "${_geo_url}.sha256sum" -o "${_geo_file}.sha256sum"; then
             echo "${YELLOW}warning: ${_geo_name} checksum unavailable, trying the next source${RESET}"
             rm -f "$_geo_file" "${_geo_file}.sha256sum"
