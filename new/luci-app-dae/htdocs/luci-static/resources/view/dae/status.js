@@ -152,6 +152,11 @@ window.addEventListener("beforeunload", clearAllTimers);
 // 每个更新锁第一次被观察到的时刻：超时后接上轮询时接着累计，不从 0:00 重来
 var _updateStartedAt = {};
 
+// 每个更新锁当前活跃的轮询器（lockField → stopPolling）。
+// 同一锁重复 startPolling 之前先停旧的，否则"超时→再点更新"会叠出两份轮询，
+// 结束时弹两次通知。
+var _updatePoller = {};
+
 // 停服后确认进程真的没了：最多 3 次（0.5s / 1.5s / 2.5s）。
 // 回调参数 true=确认停了，false=还在退（实测本机 0.82s 翻转，余量够）。
 function waitUntilStopped(callback) {
@@ -570,34 +575,69 @@ var statusWidget = baseclass.extend({
 			}
 
 			// ── Update buttons ───────────────────────────────────
+			// 轮询分两段：前 5 分钟每 3 秒（按钮保持"转"）；超时后按钮放开，
+			// 降频为每 20 秒继续盯锁，直到更新真的结束 —— 成功/失败时照样弹结果，
+			// 不会出现"按钮回来了、结果没来、原因不知道"。
+			var POLL_FAST_MS = 3000;
+			var POLL_SLOW_MS = 20000;
+			var FAST_ATTEMPTS = 100;
+
 			function startPolling(statusEl, btn, lockField, doneMsg) {
 				if (!_updateStartedAt[lockField]) _updateStartedAt[lockField] = Date.now();
 				var started = _updateStartedAt[lockField];
 				var attempt = 0;
-				// 100 × 3s = 5 分钟，只是"按钮还转不转"的上限，不是更新时限。
-				// 弱网下后端可能跑更久，到点只放开按钮，更新照常继续。
-				var maxAttempts = 100;
+				var fastTimer = null;
+				var slowTimer = null;
 				var staleField = lockField === "dae_updating" ? "dae_update_stale" : "geo_update_stale";
 
-				function showElapsed() {
+				function showElapsed(slow) {
 					var sec = Math.floor((Date.now() - started) / 1000);
-					statusEl.textContent = "\u00a0\u23f3 " + _("Updating...") + " " +
+					statusEl.textContent = "\u00a0\u23f3 " +
+						(slow ? _("Updating in background...") + " " : _("Updating...") + " ") +
 						Math.floor(sec / 60) + ":" + ("0" + (sec % 60)).slice(-2);
 				}
 
-				// clearStart=false 保留起始时间：超时后再点，计时接着走
 				function stopPolling(clearStart) {
-					clearInterval(timer);
+					clearInterval(fastTimer);
+					clearInterval(slowTimer);
+					fastTimer = slowTimer = null;
 					if (clearStart) delete _updateStartedAt[lockField];
 					btn.disabled = false;
 					statusEl.textContent = "";
+					if (_updatePoller[lockField] === stopPolling) _updatePoller[lockField] = null;
 				}
 
-				showElapsed();
+				// 更新结束：统一收尾。除通知外还要就地刷新版本号/运行状态/采样器 ——
+				// dae 更新会停服再启动，statsPoller 在停止时自停了，不在这里拉起来的话
+				// 状态行会一直显示 Inactive，直到手动刷新页面。
+				function finish(st) {
+					stopPolling(true);
+					var failedField = lockField === "dae_updating" ? "dae_update_failed" : "geo_update_failed";
+					if (st[failedField]) {
+						ui.addTimeLimitedNotification(null,
+							E("p", "\u2717 " + _("Update failed. Check /var/log/dae/dae.log")), 8000, "error");
+						return;
+					}
+					if (lockField === "dae_updating") {
+						updateVersionLine(st.version);
+						if (typeof st.running !== "undefined") {
+							setRunState(!!st.running);
+							if (st.running && statsPoller.el && !statsPoller.timer)
+								statsPoller.start(statsPoller.el);
+						}
+						ui.addTimeLimitedNotification(null,
+							E("p", "\u2713 " + doneMsg + " \u2014 " + _("Reload the page to apply.")), 5000, "info");
+					} else {
+						var ts = Math.min(st.geoip_mtime || 0, st.geosite_mtime || 0);
+						if (ts && geoDateEl) geoDateEl.textContent = _("Updated: %s").format(fmtDate(ts));
+						ui.addTimeLimitedNotification(null, E("p", "\u2713 " + doneMsg), 5000, "info");
+					}
+				}
 
-				var timer = setInterval(function() {
-					attempt++;
-					showElapsed();
+				function check(slow) {
+					// 页面在后台标签页时不轮询，省掉路由器的 fork
+					if (document.hidden) return;
+
 					getInitStatus(NAME).then(function(d) {
 						var st = (d && d[NAME]) || {};
 
@@ -611,36 +651,51 @@ var statusWidget = baseclass.extend({
 						}
 
 						if (!st[lockField]) {
-							stopPolling(true);
-							var failedField = lockField === "dae_updating" ? "dae_update_failed" : "geo_update_failed";
-							if (st[failedField]) {
-								ui.addTimeLimitedNotification(null,
-									E("p", "\u2717 " + _("Update failed. Check /var/log/dae/dae.log")), 8000, "error");
-							} else if (lockField === "dae_updating") {
-								ui.addTimeLimitedNotification(null,
-									E("p", "\u2713 " + doneMsg + " \u2014 " + _("Reload the page to apply.")), 5000, "info");
-							} else {
-								var ts = Math.min(st.geoip_mtime || 0, st.geosite_mtime || 0);
-								if (ts && geoDateEl) geoDateEl.textContent = _("Updated: %s").format(fmtDate(ts));
-								ui.addTimeLimitedNotification(null, E("p", "\u2713 " + doneMsg), 5000, "info");
-							}
-						} else if (attempt >= maxAttempts) {
-							// 锁还在 = 后端确实还在跑，只是超了 5 分钟。放开按钮，
-							// 再点会走"已在更新中"分支接上轮询，不会重复下载。
-							stopPolling(false);
+							finish(st);
+							return;
+						}
+
+						if (slow) return;
+
+						if (attempt >= FAST_ATTEMPTS) {
+							// 超过 5 分钟：按钮恢复可点，同时降频继续盯锁。
+							// 再点更新会走后端的"已在更新中"分支接上轮询，不会重复下载。
+							clearInterval(fastTimer);
+							fastTimer = null;
+							btn.disabled = false;
+							showElapsed(true);
 							ui.addTimeLimitedNotification(null,
 								E("p", "\u26a0 " + _("The update is still running in the background \u2014 check /var/log/dae/dae.log if it does not finish.")), 8000, "warning");
+							slowTimer = setInterval(function() { check(true); }, POLL_SLOW_MS);
+							trackTimer(slowTimer);
 						}
 					}).catch(function() {
-						// 轮询本身失败时也要能收尾，否则按钮会一直灰着
-						if (attempt >= maxAttempts) {
-							stopPolling(false);
-							ui.addTimeLimitedNotification(null,
-								E("p", "\u26a0 " + _("The update is still running in the background \u2014 check /var/log/dae/dae.log if it does not finish.")), 8000, "warning");
-						}
+						// 轮询本身失败（rpcd 抖动/掉线）：不据此判定结果，
+						// 快慢两个阶段都继续等到拿到确定状态或页面关闭。
 					});
-				}, 3000);
-				trackTimer(timer);
+				}
+
+				// 同一锁已有轮询在跑（超时后又点了一次更新）：先停旧的，再接管
+				if (_updatePoller[lockField]) _updatePoller[lockField](false);
+				_updatePoller[lockField] = stopPolling;
+
+				// 累计已超过 5 分钟的（后台模式里再点更新）：直接进慢速阶段，
+				// 按钮保持可点 —— 否则点一下又重新灰 5 分钟，越点越糟。
+				if (Date.now() - started >= FAST_ATTEMPTS * POLL_FAST_MS) {
+					btn.disabled = false;
+					showElapsed(true);
+					slowTimer = setInterval(function() { check(true); }, POLL_SLOW_MS);
+					trackTimer(slowTimer);
+					return;
+				}
+
+				showElapsed(false);
+				fastTimer = setInterval(function() {
+					attempt++;
+					showElapsed(false);
+					check(false);
+				}, POLL_FAST_MS);
+				trackTimer(fastTimer);
 			}
 
 			function updBtn(label, action, lockField, active) {

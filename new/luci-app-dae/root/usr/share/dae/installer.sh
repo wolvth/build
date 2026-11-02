@@ -49,7 +49,9 @@ SHA256SUM() {
 # 统一超时与重试：curl 若无限挂起，更新锁（/var/run/dae-update.lock）就永远不释放
 # -C - 断点续传：--retry 重试时从已下载的字节处继续，而不是每次从 0 重来。
 # 没有它，链路慢于 16MB/300s（约 55 KB/s）时永远下不完，重试只是重复浪费 5 分钟。
-CURL_OPTS='-fsSL --connect-timeout 15 --max-time 300 --retry 2 --retry-delay 2 -C -'
+# --speed-time/--speed-limit：30 秒内速度低于 1KB/s 判定死链，立刻结束本次尝试
+# 进入重试（配合 -C - 续传），而不是干等 300s 的 max-time 超时。
+CURL_OPTS='-fsSL --connect-timeout 15 --max-time 300 --retry 2 --retry-delay 2 -C - --speed-time 30 --speed-limit 1024'
 fetch() {
     curl $CURL_OPTS "$@"
 }
@@ -61,20 +63,138 @@ fetch_soft() {
     curl $SOFT_CURL_OPTS "$@"
 }
 
+## ── 超时兜底 ─────────────────────────────────────────────────────────────────
+# 给"理论上可能挂住"的命令加超时。网络操作有 curl 的 max-time 兜底，
+# 但下面几个是本地执行、原本没有上限的地方：
+#   - 试运行下载的 dae 二进制（坏二进制挂起 → 更新永远卡住）
+#   - procd/systemd 停服（dae 卡在内核态不响应 SIGTERM → stop 永远不返回）
+# busybox 的 timeout applet 在部分固件里缺失，这里优先用独立 timeout 二进制，
+# 没有就退化为纯 shell 看门狗。返回命令自己的退出码，超时被杀返回非零。
+run_timeout() {
+    _rt_secs="$1"
+    shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$_rt_secs" "$@" || return $?
+        return 0
+    fi
+    "$@" &
+    _rt_pid=$!
+    ( sleep "$_rt_secs"; kill -9 "$_rt_pid" 2>/dev/null ) &
+    _rt_killer=$!
+    if wait "$_rt_pid"; then _rt_rc=0; else _rt_rc=$?; fi
+    kill "$_rt_killer" 2>/dev/null || true
+    wait "$_rt_killer" 2>/dev/null || true
+    return "$_rt_rc"
+}
+
+## ── 进度显示 ─────────────────────────────────────────────────────────────────
+# 字节 → 人类可读（busybox awk，兼容 set -e）
+fmt_size() {
+    awk -v b="$1" 'BEGIN{
+        if (b+0 >= 1073741824) printf "%.2fGB", b/1073741824;
+        else if (b+0 >= 1048576) printf "%.1fMB", b/1048576;
+        else if (b+0 >= 1024) printf "%.1fKB", b/1024;
+        else printf "%dB", b+0;
+    }'
+}
+
+# HEAD 探测下载总大小（跟随跳转，取最后一跳的 content-length）。
+# GitHub release 资产能拿到；jsDelivr 等源不回 content-length，返回空。
+probe_size() {
+    curl -fsSIL --connect-timeout 10 --max-time 20 "$1" 2>/dev/null |
+        grep -i '^content-length:' | tail -n1 | tr -dc '0-9'
+}
+
+# 带进度/速度的下载：curl 放后台，主进程每秒量一次落盘文件大小，整行输出
+#   progress: 12.3MB/45.6MB (27%) | 4.1MB/s | eta 8s
+# 不用 \r 动画条：dae.log 是追加日志，\r 会糊成一行乱码，LuCI 也不刷新 \r。
+# 大小不增长时每 5 秒报一次 stalled，既不刷屏也看得见卡住。
+# HEAD 拿不到总大小时退化为只报已下载量和速度。
+# 其余行为与 fetch 完全一致：透传参数、返回 curl 的退出码。
+fetch_progress() {
+    _fp_url="$1"
+    _fp_out="$2"
+    shift 2
+
+    _fp_total="$(probe_size "$_fp_url")"
+    if [ -z "$_fp_total" ] || [ "$_fp_total" -le 0 ] 2>/dev/null; then
+        _fp_total=''
+    fi
+
+    _fp_t0="$(date +%s)"
+    _fp_prev=0
+    _fp_stall=0
+    curl $CURL_OPTS "$@" "$_fp_url" -o "$_fp_out" &
+    _fp_pid=$!
+
+    while kill -0 "$_fp_pid" 2>/dev/null; do
+        sleep 1
+        if ! kill -0 "$_fp_pid" 2>/dev/null; then
+            break
+        fi
+        # curl 建立连接/跟跳期间输出文件可能还没创建；< file 的重定向失败信息
+        # 由 shell 报告，2>/dev/null 拦不住，所以先用 -f 守卫再量
+        if [ -f "$_fp_out" ]; then
+            _fp_now="$(wc -c < "$_fp_out")"
+        else
+            _fp_now=0
+        fi
+        _fp_delta=$(( _fp_now - _fp_prev ))
+        _fp_prev=$_fp_now
+        if [ "$_fp_delta" -le 0 ]; then
+            _fp_stall=$(( _fp_stall + 1 ))
+            if [ $(( _fp_stall % 5 )) -ne 0 ]; then
+                continue
+            fi
+            _fp_note="stalled ${_fp_stall}s"
+        else
+            _fp_stall=0
+            _fp_note="$(fmt_size "$_fp_delta")/s"
+            if [ -n "$_fp_total" ] && [ "$_fp_total" -gt "$_fp_now" ]; then
+                _fp_note="$_fp_note | eta $(( ( _fp_total - _fp_now ) / _fp_delta ))s"
+            fi
+        fi
+        if [ -n "$_fp_total" ]; then
+            echo "      progress: $(fmt_size "$_fp_now")/$(fmt_size "$_fp_total") ($(( _fp_now * 100 / _fp_total ))%) | $_fp_note"
+        else
+            echo "      progress: $(fmt_size "$_fp_now") | $_fp_note"
+        fi
+    done
+
+    if wait "$_fp_pid"; then
+        _fp_rc=0
+    else
+        _fp_rc=$?
+    fi
+    _fp_el=$(( $(date +%s) - _fp_t0 ))
+    if [ "$_fp_el" -le 0 ]; then _fp_el=1; fi
+    if [ -f "$_fp_out" ]; then
+        _fp_end="$(wc -c < "$_fp_out")"
+    else
+        _fp_end=0
+    fi
+    if [ "$_fp_rc" -eq 0 ]; then
+        echo "${GREEN}      download complete: $(fmt_size "$_fp_end") in ${_fp_el}s (avg $(fmt_size $(( _fp_end / _fp_el )))/s)${RESET}"
+    else
+        echo "${YELLOW}      download attempt ended: curl exit $_fp_rc after ${_fp_el}s${RESET}"
+    fi
+    return "$_fp_rc"
+}
+
 # GitHub 直连失败时退到 worker CDN 前缀代理（借自旧的 third-party.sh）。
 # 只对 github.com 的下载地址生效；用 use-cdn 时 URL 本身已经是 CDN，不再套一层。
 CDN_PREFIX='https://github.abskoop.workers.dev/'
 download() {
     _dl_url="$1"
     _dl_out="$2"
-    fetch "$_dl_url" -o "$_dl_out" && return 0
+    fetch_progress "$_dl_url" "$_dl_out" && return 0
 
     case "$_dl_url" in
         https://github.com/*)
             [ "$use_cdn" = 'yes' ] && return 1
             echo "${YELLOW}warning: direct download failed, retrying via CDN${RESET}"
             rm -f "$_dl_out"          # 代理不一定支持 Range，别拿半截文件续传
-            fetch "${CDN_PREFIX}${_dl_url}" -o "$_dl_out" && return 0
+            fetch_progress "${CDN_PREFIX}${_dl_url}" "$_dl_out" && return 0
             ;;
     esac
     return 1
@@ -312,7 +432,7 @@ download_geo_asset() {
 
     for _geo_url in "$@"; do
         echo "${GREEN}Downloading ${_geo_name} from: $_geo_url${RESET}"
-        if ! fetch "$_geo_url" -o "$_geo_file"; then
+        if ! fetch_progress "$_geo_url" "$_geo_file"; then
             echo "${YELLOW}warning: ${_geo_name} download failed, trying the next source${RESET}"
             rm -f "$_geo_file" "${_geo_file}.sha256sum"
             continue
@@ -417,8 +537,13 @@ download_dae() {
     fi
 
     chmod +x "$dae_new"
-    # 解包后先试跑一次：架构不符会在这里暴露，而不是替换完 /usr/bin/dae 才发现
-    if ! "$dae_new" --version >/dev/null 2>&1; then
+    # 解包后先试跑一次：架构不符会在这里暴露，而不是替换完 /usr/bin/dae 才发现。
+    # run_timeout 兜底：坏二进制万一挂起，不能让整个更新永远卡在这里。
+    _trial_ok=0
+    if run_timeout 10 "$dae_new" --version >/dev/null 2>&1; then
+        _trial_ok=1
+    fi
+    if [ "$_trial_ok" != '1' ]; then
         echo "${RED}error: downloaded dae cannot run on this system (arch: $MACHINE)${RESET}"
         exit 1
     fi
@@ -471,11 +596,20 @@ stop_dae() {
     if [ -x /etc/init.d/dae ] && \
        { /etc/init.d/dae running >/dev/null 2>&1 || [ -s /run/dae.pid ]; }; then
         echo "${GREEN}Stopping dae (procd)...${RESET}"
-        /etc/init.d/dae stop && dae_stopped='1'
+        run_timeout 60 /etc/init.d/dae stop && dae_stopped='1'
     elif command -v systemctl >/dev/null 2>&1 && \
          [ "$(systemctl is-active dae 2>/dev/null)" = 'active' ]; then
         echo "${GREEN}Stopping dae (systemd)...${RESET}"
-        systemctl stop dae && dae_stopped='1'
+        run_timeout 60 systemctl stop dae && dae_stopped='1'
+    fi
+
+    # 停服兜底：60 秒还没停下来（进程还活着），就不继续换二进制。
+    # 否则 cp 会失败（Text file busy），或者更糟——更新永远挂在 stop 上。
+    # 这时旧二进制仍在原位运行，服务不受影响，报错退出让用户重试即可。
+    if [ "$dae_stopped" != '1' ] && dae_running; then
+        echo "${RED}error: dae is still running after 60s — refusing to replace the binary.${RESET}"
+        echo "${YELLOW}       Old dae is still in place and running. Retry later, or reboot the router.${RESET}"
+        exit 1
     fi
 }
 
@@ -495,7 +629,9 @@ start_dae() {
     [ "$dae_stopped" = '1' ] || return 0
 
     echo "${GREEN}Starting dae...${RESET}"
-    /etc/init.d/dae start
+    # 启动兜底：init 脚本本身也可能挂住（等 procd 实例就绪），
+    # 先限时调用，再走下面的 4 秒进程验证，失败路径和原来一致。
+    run_timeout 120 /etc/init.d/dae start || true
 
     # /etc/init.d/* start 的返回值不可信：rc.common 的 start() 用 if 包住
     # start_service，失败也返回 0（实测 start_service 里 return 1，脚本仍 exit 0）。
@@ -665,6 +801,8 @@ Commands:
 Notes (manual run):
   - Output goes to your terminal here; when LuCI runs this script the same
     output is appended to /var/log/dae/dae.log.
+  - Downloads print one progress line per second (size, %, speed, ETA);
+    a stalled transfer is reported as "stalled Ns" every 5 seconds.
   - install / force-install download everything first and stop dae only for the
     file swap. A failed download or checksum exits before touching the service.
   - update-geoip / update-geosite only replace the data files; dae keeps running.
@@ -678,8 +816,10 @@ EOF
 ## ── Entry point ──────────────────────────────────────────────────────────────
 current_dir="$(pwd)"
 cd /tmp || { echo "${YELLOW}Cannot cd to /tmp${RESET}"; exit 1; }
-# 中途失败也要清掉安装阶段的临时目录与残留压缩包
-trap '[ -n "$_geo_stage" ] && rm -rf "$_geo_stage"; [ -n "$_dae_stage" ] && rm -rf "$_dae_stage"; rm -f dae-linux-*.zip dae-linux-*.zip.dgst; cd "$current_dir"; true' EXIT INT TERM
+# 中途失败也要清掉安装阶段的临时目录与残留压缩包；_fp_pid 是还在跑的后台 curl。
+# 注意 kill 在 && 列表末位：对已退出的 pid 会失败并触发 set -e 中断 trap，
+# 所以用 { kill || true; } 兜底，保证 trap 正常走完、退出状态不被污染。
+trap '[ -n "$_geo_stage" ] && rm -rf "$_geo_stage"; [ -n "$_dae_stage" ] && rm -rf "$_dae_stage"; rm -f dae-linux-*.zip dae-linux-*.zip.dgst; [ -n "$_fp_pid" ] && { kill "$_fp_pid" 2>/dev/null || true; }; cd "$current_dir"; true' EXIT INT TERM
 
 if [ $# -eq 0 ]; then
     # 不带参数只打印帮助：手动执行时不会因为手滑就把 dae 换掉。
