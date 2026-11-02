@@ -125,6 +125,12 @@ var CodeMirrorTextValue = form.TextValue.extend({
 .cm-format-btn { margin-bottom: 5px; display: inline-block; }\
 .cm-editor-toolbar { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }\
 .cm-editor-toolbar .cm-status { font-size: 0.85em; color: #888; margin-left: auto; }\
+.cm-s-dracula .CodeMirror-foldgutter { width: 18px; }\
+.cm-s-dracula .CodeMirror-foldgutter-open,\
+.cm-s-dracula .CodeMirror-foldgutter-folded {\
+	background: transparent; color: #8be9fd; font-size: 18px; line-height: 1.5; cursor: pointer; padding: 0 2px; }\
+.cm-s-dracula .CodeMirror-foldgutter span {\
+	display: inline-block; min-width: 14px; text-align: center; }\
 ';
 			node.appendChild(style);
 
@@ -152,6 +158,7 @@ var CodeMirrorTextValue = form.TextValue.extend({
 					matchBrackets: true,
 					autoCloseBrackets: true,
 					foldGutter: true,
+					foldOptions: { rangeFinder: CodeMirror.fold.indent },
 					gutters: ["CodeMirror-linenumbers", "CodeMirror-foldgutter"],
 				});
 				_cmEditor = editor;
@@ -177,6 +184,96 @@ var CodeMirrorTextValue = form.TextValue.extend({
 					var pos = editor.getCursor();
 					statusSpan.textContent = _('Ln %s, Col %s').format(pos.line + 1, pos.ch + 1);
 				});
+				// ── 折叠状态记忆：关页面再打开仍保持折好的区块（存浏览器 localStorage）──
+				// 存“行号 + 该行内容指纹”：正常按行号恢复；若配置增删行导致行号错位，
+				// 再用内容指纹就近匹配，避免折错行（dae 里有重复的 routing { 块，纯内容会撞车）。
+				var _foldKey = "luci-app-dae.config.folds";
+				function _sig(_t) { return (_t || "").trim().slice(0, 200); }
+				function _loadFolds() {
+					try {
+						var raw = JSON.parse(localStorage.getItem(_foldKey) || "[]");
+						var out = [];
+						for (var _i = 0; _i < raw.length; _i++) {
+							var _it = raw[_i];
+							if (typeof _it === "number") out.push({ l: _it, s: null });
+							else if (_it && typeof _it.l === "number") out.push({ l: _it.l, s: (typeof _it.s === "string" ? _it.s : null) });
+						}
+						return out;
+					} catch (e) { return []; }
+				}
+				function _persistFolds() {
+					try {
+						var arr = [];
+						var _n = editor.lineCount();
+						for (var _i = 0; _i < _n; _i++) {
+							var _marks = editor.findMarks(CodeMirror.Pos(_i, 0), CodeMirror.Pos(_i + 1, 0));
+							for (var _j = 0; _j < _marks.length; _j++) {
+								if (_marks[_j].__isFold) {
+									var _f = _marks[_j].find();
+									if (_f && _f.from.line == _i) { arr.push({ l: _i, s: _sig(editor.getLine(_i)) }); break; }
+								}
+							}
+						}
+						localStorage.setItem(_foldKey, JSON.stringify(arr));
+					} catch (e) {}
+				}
+				editor.on("fold", _persistFolds);
+				editor.on("unfold", _persistFolds);
+				// 兜底：刷新/关页面前再存一次
+				function _saveOnLeave() { _persistFolds(); }
+				if (window.addEventListener) {
+					window.addEventListener("pagehide", _saveOnLeave);
+					window.addEventListener("beforeunload", _saveOnLeave);
+				}
+				// 恢复折叠：存的是“行号 + 该行内容指纹”。先按行号精确匹配；
+				// 若行号错位（配置增删过行），再按内容找离原行号最近的一行。
+				function _restoreFolds() {
+					var saved = _loadFolds();
+					if (!saved.length) return;
+					var attempt = 0;
+					(function tryRestore() {
+						if (editor.lineCount() > 1) {
+							editor.operation(function() {
+								var n = editor.lineCount();
+								for (var _i = 0; _i < saved.length; _i++) {
+									var e = saved[_i], target = -1;
+									if (e.l >= 0 && e.l < n && (e.s == null || _sig(editor.getLine(e.l)) === e.s)) {
+										target = e.l;
+									} else if (e.s != null) {
+										var best = -1, bestDist = Infinity;
+										for (var _j = 0; _j < n; _j++) {
+											if (_sig(editor.getLine(_j)) === e.s) {
+												var d = Math.abs(_j - e.l);
+												if (d < bestDist) { bestDist = d; best = _j; }
+											}
+										}
+										target = best;
+									}
+									if (target >= 0 && target < n) { try { editor.foldCode(target); } catch (e2) {} }
+								}
+							});
+							return;
+						}
+						if (++attempt < 60) setTimeout(tryRestore, 100);
+					})();
+				}
+				_restoreFolds();
+
+				// ── 输入 > 自动变成 ->（dae 路由标记）──
+				// 不能用 extraKeys 绑 ">"，因为 ">" 是 Shift+.，CodeMirror 的 extraKeys
+				// 收不到这种组合键，必须用 DOM 级 keydown 拦截。
+				// 若前一个字符是 -（用户想写域名里的连字符，或已经打了半个 ->），
+				// 则只补一个 >，避免变成 -->。
+				editor.on("keydown", function(cm, e) {
+					if (e.isComposing) return;
+					if (e.key === ">") {
+						e.preventDefault();
+						var cur = cm.getCursor();
+						var prev = cm.getRange({ line: cur.line, ch: Math.max(0, cur.ch - 1) }, cur);
+						cm.replaceSelection(prev === "-" ? ">" : "->");
+					}
+				});
+
 			}).catch(function() {
 				// 编辑器脚本挂了不能连带整个页面报错，退回原生 textarea
 				ui.addTimeLimitedNotification(null,
