@@ -590,8 +590,19 @@ download_completions() {
 }
 
 ## ── Service (procd-first, systemd fallback) ──────────────────────────────────
+
+# 跨进程标记：本次更新把"原本在跑"的 dae 停掉了。若更新进程死在 stop 和 start
+# 之间，标记会残留到下次更新，让下次结束时把 dae 拉起来 —— 只看 dae_stopped
+# 不够：下次更新开始时 dae 已经是停的，stop_dae 根本不会设 dae_stopped。
+# /var/run 是 tmpfs，重启即清；重启后由 rc.d 按开机自启策略处理，不需要这个标记。
+WAS_RUNNING_FLAG=/var/run/dae-update.was-running
+
 stop_dae() {
     dae_stopped=''
+    # 停之前先落标记，跨进程保存"它本来在跑"
+    if dae_running; then
+        : > "$WAS_RUNNING_FLAG"
+    fi
     # procd 的 running 比 pidfile 可靠（pidfile 由 dae 自己写，可能落后或残留）
     if [ -x /etc/init.d/dae ] && \
        { /etc/init.d/dae running >/dev/null 2>&1 || [ -s /run/dae.pid ]; }; then
@@ -626,7 +637,11 @@ check_init_script() {
 }
 
 start_dae() {
-    [ "$dae_stopped" = '1' ] || return 0
+    # 本次停过（dae_stopped=1），或上次更新留下了"本该在跑"的标记（进程被杀），
+    # 两种情况都要拉起。首次安装两者都不成立，保持"不 start 也不 enable"的语义。
+    if [ "$dae_stopped" != '1' ] && [ ! -f "$WAS_RUNNING_FLAG" ]; then
+        return 0
+    fi
 
     echo "${GREEN}Starting dae...${RESET}"
     # 启动兜底：init 脚本本身也可能挂住（等 procd 实例就绪），
@@ -643,6 +658,7 @@ start_dae() {
         sleep 1
         if dae_running; then
             echo "${GREEN}dae started.${RESET}"
+            rm -f "$WAS_RUNNING_FLAG"
             return 0
         fi
     done

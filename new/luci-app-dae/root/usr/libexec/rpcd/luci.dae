@@ -315,7 +315,7 @@ set_init_action() {
             ( touch "$DAE_LOCK"
               _do_download "$channel"
               rc=$?
-              rm -f "$DAE_LOCK"
+              rm -f "$DAE_LOCK" "$DAE_PID"
               [ $rc -eq 0 ] || touch "$DAE_FAIL" ) &
             # $! 是上面那个子 shell 的 PID，整个下载期间它都活着，
             # 只读接口用 kill -0 就能判断更新是否还在跑
@@ -336,7 +336,7 @@ set_init_action() {
                   sh "$INSTALLER" update-geosite >> "$LOG" 2>&1
                   rc=$?
               fi
-              rm -f "$GEO_LOCK"
+              rm -f "$GEO_LOCK" "$GEO_PID"
               [ $rc -eq 0 ] || touch "$GEO_FAIL" ) &
             echo "$!" > "$GEO_PID"
             print_json_bool "result" '1'
