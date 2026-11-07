@@ -113,10 +113,28 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo bash -c 'bash <(curl -s https://build-scripts.immortalwrt.org/init_build_environment.sh)'
-        sudo -E apt-get -qq install dwarves
-        sudo timedatectl set-timezone "$TZ"
-        sudo chown $USER:$GROUPS $GITHUB_WORKSPACE
+        LOG=/tmp/init_env.log
+        : >"$LOG"
+        fail() { echo "::error::$1 失败，日志尾部："; tail -n 100 "$LOG"; exit 1; }
+
+        # 依赖安装的输出有几千行（apt + 官方脚本），全部折叠进日志，只在失败时回放。
+        # curl -f 保证 4xx/5xx 直接失败：原来的 bash <(curl -s ...) 在网络不可达时
+        # 会让 bash 读到空脚本并返回 0，步骤显示成功但依赖一个没装
+        echo ">>> 下载 init_build_environment.sh"
+        curl -fsSL -o /tmp/init_build_env.sh https://build-scripts.immortalwrt.org/init_build_environment.sh >>"$LOG" 2>&1 \
+          || fail "下载初始化脚本"
+
+        echo ">>> 执行官方初始化脚本（装依赖）"
+        sudo bash /tmp/init_build_env.sh >>"$LOG" 2>&1 || fail "初始化脚本"
+
+        # p7zip-full 在这里装：原来放在发布前，装失败等于白跑整条构建
+        echo ">>> 安装 dwarves / p7zip-full"
+        sudo -E apt-get -qq install dwarves p7zip-full >>"$LOG" 2>&1 || fail "apt install"
+
+        sudo timedatectl set-timezone "$TZ" || fail "设置时区"
+        sudo chown "$USER:$(id -gn)" "$GITHUB_WORKSPACE" || fail "chown workspace"
+
+        echo "✅ 依赖安装完成（$(wc -l < "$LOG") 行输出已折叠到 $LOG）"
         
     - name: Clone Source Code
       run: |
@@ -544,7 +562,14 @@ jobs:
     - name: Download Libraries
       working-directory: ./openwrt
       run: |
-        make download -j8
+        # make download 是最容易因镜像抖动失败的一步，重试 3 次
+        ok=0
+        for i in 1 2 3; do
+          if make download -j$(( $(nproc) + 1 )); then ok=1; break; fi
+          echo "::warning::download 第 $i 次失败，15s 后重试"
+          sleep 15
+        done
+        [ "$ok" = 1 ] || { echo "::error::make download 连续 3 次失败"; exit 1; }
 
     - name: Compile OpenWrt
       working-directory: ./openwrt
@@ -602,11 +627,13 @@ jobs:
     - name: Encrypt Firmware
       id: encrypt
       if: steps.organize.outputs.status == 'success'
+      env:
+        PASS: ${{ secrets.FIRMWARE_PASSWORD }}
       run: |
-        sudo apt-get install -y p7zip-full
+        # 密码为空时 7z 会生成未加密包，而 release 说明写着"已加密"，必须硬失败
+        [ -n "$PASS" ] || { echo "::error::FIRMWARE_PASSWORD 未设置，拒绝生成未加密固件"; exit 1; }
         ENCRYPT_NAME="OpenWrt_${{ env.DEVICE_PROFILE }}-$(date +'%Y.%m.%d-%H%M%S').7z"
-
-        7z a -t7z -mhe=on -p"${{ secrets.FIRMWARE_PASSWORD }}" "$ENCRYPT_NAME" ${{ env.FIRMWARE }}/*
+        7z a -t7z -mhe=on -p"$PASS" "$ENCRYPT_NAME" "$FIRMWARE"/*
         mkdir -p upload_out
         mv "$ENCRYPT_NAME" upload_out/
         ls -lh upload_out/
