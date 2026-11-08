@@ -69,6 +69,7 @@ restore_resolv_conf() {
 }
 
 start_service() {
+    mkdir -p /var/log/honk
     local enabled config_file
 
     config_load "$CONF"
