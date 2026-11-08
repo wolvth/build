@@ -205,13 +205,30 @@ jobs:
 
     - name: diy nanopi-r4s armv8.mk 支持1G版本
       working-directory: ./openwrt
+      env:
+        # immortalwrt 引导栈版本，已验证可在 R4S 1GB 启动
+        # 升级：git ls-remote https://github.com/immortalwrt/immortalwrt.git refs/heads/openwrt-25.12
+        #      拿到新 sha 改这一行 → 跑一次构建 → 刷机确认能启动再保留
+        IMM_COMMIT: 3682a14dd5ec6382af65d7e72b5b415b5f3173a8
       run: |
         rm -rf package/boot/uboot-rockchip
         rm -rf package/boot/arm-trusted-firmware-rockchip
         rm -rf package/boot/rkbin
         rm -rf target/linux/rockchip/image
         
-        git clone https://github.com/immortalwrt/immortalwrt.git /tmp/immortalwrt --depth 1 -b openwrt-25.12
+        # 钉住 commit：openwrt-25.12 是分支，imm 侧改动会静默改变引导流程
+        # sparse 只取需要的 3 个目录，全量 clone 约 400MB，这里不到 10MB
+        git clone --depth 1 -b openwrt-25.12 --filter=blob:none --sparse \
+          https://github.com/immortalwrt/immortalwrt.git /tmp/immortalwrt
+        git -C /tmp/immortalwrt sparse-checkout set \
+          package/boot/uboot-rockchip \
+          package/boot/arm-trusted-firmware-rockchip \
+          target/linux/rockchip/image
+        git -C /tmp/immortalwrt fetch --depth 1 origin "$IMM_COMMIT"
+        git -C /tmp/immortalwrt checkout "$IMM_COMMIT"
+        [ "$(git -C /tmp/immortalwrt rev-parse HEAD)" = "$IMM_COMMIT" ] \
+          || { echo "::error::immortalwrt 未能切到 $IMM_COMMIT"; exit 1; }
+        echo "✅ immortalwrt @ $(git -C /tmp/immortalwrt log -1 --format='%h %ad' --date=short)"
         cp -r /tmp/immortalwrt/package/boot/uboot-rockchip package/boot/
         cp -r /tmp/immortalwrt/package/boot/arm-trusted-firmware-rockchip package/boot/
         cp -r /tmp/immortalwrt/target/linux/rockchip/image target/linux/rockchip/
