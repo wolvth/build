@@ -41,10 +41,9 @@ start_service() {
 		return 1
 	fi
 
-	if [ "$(uci -q get honk.config.enabled)" = 1 ] &&
-		ubus call service list '{"name":"honk"}' 2>/dev/null |
+	if ubus call service list '{"name":"honk"}' 2>/dev/null |
 		jsonfilter -q -e '@.honk.instances[*].running' | grep -q true; then
-                init_log "honk is running; dae and honk cannot run at the same time, disable honk first"
+		init_log "honk is running; dae and honk cannot run at the same time, stop honk first"
 		return 1
 	fi
 
