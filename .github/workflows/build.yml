@@ -102,13 +102,6 @@ jobs:
         npm_clean: "True"
         os_swap: "True"
 
-    - name: Setup Go Environment
-      uses: actions/setup-go@v7
-      with:
-        go-version: 'stable'
-        check-latest: true
-        cache: false 
-
     - name: Initialization Environment
       env:
         DEBIAN_FRONTEND: noninteractive
