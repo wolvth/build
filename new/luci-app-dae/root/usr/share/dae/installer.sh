@@ -240,9 +240,16 @@ download() {
 }
 
 # geo 数据来自 v2ray-rules-dat，与 dae 版本无关，固定地址
-# 主源 GitHub Release；拉不动或校验不过时退到 jsDelivr 镜像（同一版本，sha256 一致）
+# 每个源都必须能在同目录取到 <url>.sha256sum，且数据文件与校验文件必须是同一版本。
+# 源顺序（按优先级）：GitHub Release -> GitHub raw(release 分支) -> jsDelivr。
+# 2026-11-08: jsDelivr @release 出现过 geosite.dat 仍是旧版、同目录
+# .sha256sum 已刷新，于是下载成功但校验必然不符（缓存滞后）。
+# GitHub raw 同样有 CDN，但实测 dat 与 .sha256sum 同版本，故插到 jsDelivr 之前；
+# jsDelivr 保留为最后兜底，但不再是唯一可用的回退源。
 GEOIP_URL='https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat'
 GEOSITE_URL='https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat'
+GEOIP_RAW='https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat'
+GEOSITE_RAW='https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat'
 GEOIP_MIRROR='https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat'
 GEOSITE_MIRROR='https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat'
 
@@ -501,6 +508,7 @@ download_geo_asset() {
         _geo_remote="$(awk '{print $1}' < "${_geo_file}.sha256sum")"
         if [ "$_geo_local" != "$_geo_remote" ]; then
             echo "${RED}error: ${_geo_name} checksum mismatch — local=$_geo_local remote=$_geo_remote${RESET}"
+            echo "${YELLOW}      source data and .sha256sum are out of sync (stale CDN cache), trying next source${RESET}"
             rm -f "$_geo_file" "${_geo_file}.sha256sum"
             continue
         fi
@@ -541,11 +549,11 @@ update_geo_asset() {
 }
 
 update_geoip() {
-    update_geo_asset geoip "$GEOIP_URL" "$GEOIP_MIRROR"
+    update_geo_asset geoip "$GEOIP_URL" "$GEOIP_RAW" "$GEOIP_MIRROR"
 }
 
 update_geosite() {
-    update_geo_asset geosite "$GEOSITE_URL" "$GEOSITE_MIRROR"
+    update_geo_asset geosite "$GEOSITE_URL" "$GEOSITE_RAW" "$GEOSITE_MIRROR"
 }
 
 ## ── dae binary ───────────────────────────────────────────────────────────────
@@ -780,10 +788,10 @@ installation() {
 
     # 下载阶段：dae 仍在运行，慢网也不会拉长停机时间
     download_dae
-    if ! download_geo_asset geoip "$_geo_stage" "$GEOIP_URL" "$GEOIP_MIRROR"; then
+    if ! download_geo_asset geoip "$_geo_stage" "$GEOIP_URL" "$GEOIP_RAW" "$GEOIP_MIRROR"; then
         rm -rf "$_geo_stage"; exit 1
     fi
-    if ! download_geo_asset geosite "$_geo_stage" "$GEOSITE_URL" "$GEOSITE_MIRROR"; then
+    if ! download_geo_asset geosite "$_geo_stage" "$GEOSITE_URL" "$GEOSITE_RAW" "$GEOSITE_MIRROR"; then
         rm -rf "$_geo_stage"; exit 1
     fi
     download_example_config
@@ -876,8 +884,9 @@ Notes (manual run):
   - install / force-install download everything first and stop dae only for the
     file swap. A failed download or checksum exits before touching the service.
   - update-geoip / update-geosite only replace the data files; dae keeps running.
-  - geo data is fetched from GitHub first and falls back to the jsDelivr mirror
-    when the download or the checksum fails; a bad file is never installed.
+  - geo data is fetched from GitHub Release first, then GitHub raw (release
+    branch), then the jsDelivr mirror; a source is skipped when the download or
+    the checksum fails. A bad file is never installed.
   - use-cdn only covers the dae binary and the example config.
   - After a run: /etc/init.d/dae status ; tail -n 50 /var/log/dae/dae.log
 EOF
