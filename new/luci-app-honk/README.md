@@ -1,65 +1,59 @@
-# luci-app-honk
+# luci-app-honk（定制版）
 
-OpenWrt 上的 honk（基于 eBPF 的高性能透明代理引擎，dae 兼容）LuCI 管理界面与安装包。
+OpenWrt 上 honk（eBPF 透明代理，兼容 dae）的 LuCI 界面与安装包。
 
-## 仓库组件
+本目录是 [QiuSimons/luci-app-honk](https://github.com/QiuSimons/luci-app-honk) 的定制版，
+放在 `wolvth/build` 仓库的 `new/luci-app-honk/` 下（比上游多一层目录，无法直接 `git merge`）。
 
-本仓库包含两个 OpenWrt 软件包：
+## 软件包
 
-| 包名 | 类型 | 说明 |
-| :--- | :--- | :--- |
-| **`luci-app-honk`** | 管理界面 | 基于 LuCI 与 Ucode 构建的 Web 控制界面与 rpcd 服务 |
-| **`honk`** | 核心服务 | 从 [daeuniverse/honk](https://github.com/daeuniverse/honk) Release 下载预编译静态 `honk-core` 并配置 init.d 守护进程 |
+| 包 | 内容 |
+| --- | --- |
+| `honk` | `honk-core`、init.d 脚本、`/etc/honk/` 默认配置 |
+| `luci-app-honk` | LuCI 页面、rpcd/ucode 服务、Doona 静态面板 |
 
-> [!NOTE]
-> 目前 `honk-core` 仅提供 `x86_64` 与 `aarch64` 的预编译 musl 静态二进制。
+## 与上游的主要差异
 
-## 编译与安装
+1. **honk-core 打包方式**：上游已改为「按 git commit 自编译」（`honk/build_honk_core.sh`
+   + `honk/honk_toolchain.sh`，宿主机需 Rust / Zig / bpf-linker）。本定制版**仍下载预编译
+   release**：`honk/Makefile` 里用 `HONK_RELEASE_TAG` 与 `HONK_HASH_*` 钉住版本，
+   选 `-stock` 后缀的 stock-malloc 构建以降低小内存网关的 RSS，并保留 `postinst`
+   默认禁用服务。上游那两个构建脚本随仓库保留，但 **Makefile 不调用**。
+2. **运行时互斥**：`honk.init` 会检查 dae 是否在运行，dae 与 honk 不能同时启动。
+3. **LuCI 定制**：自定义状态栏（CPU / RSS / threads / uptime / 版本 / 自启动开关 /
+   启停重载按钮）、连接地址显示、配置编辑器的明暗调色板、全局页按 `/etc/honk/config.dae`
+   内容变化决定是否 restart，**所有标签页常态显示**（不按 advanced / dashboard 隐藏）。
+   上游的 `light-dark()` 配色未采用，但编辑器的全宽布局修复已并入。
+4. `luci-app-honk` 不强制依赖 `+honk`（核心单独安装）；依赖 `+unzip` 供 doona-lite 部署。
 
-1. 拉取源码至 OpenWrt 源码树：
-
-   ```bash
-   git clone https://github.com/QiuSimons/luci-app-honk package/honk
-   ```
-
-2. 配置并编译：
-
-   ```bash
-   make menuconfig
-   # 选择：Network -> Web Servers/Proxies -> luci-app-honk
-
-   make package/honk/compile V=s
-   ```
-
-## 配置文件结构
-
-honk 采用模块化拆分配置，主配置与子模块均位于 `/etc/honk/`：
+## 配置文件
 
 ```text
 /etc/honk/
-├── config.dae          # 主配置文件
-├── config.d/           # 拆分模块目录
+├── config.dae          # 主配置
+├── config.d/
 │   ├── node.dae        # 节点与订阅
-│   ├── route.dae       # 分流路由规则
-│   ├── dns.dae         # DNS 解析与分流
-│   └── api.dae         # Native API 与控制面板鉴权
-└── state/              # 运行状态与 SQLite 数据库 (honk.db)
+│   ├── route.dae       # 分流规则
+│   ├── dns.dae         # DNS
+│   └── api.dae         # Native API 与控制面板
+└── state/              # 运行状态与 honk.db
 ```
 
-> [!TIP]
-> 首次使用前，请先编辑 `/etc/honk/config.d/node.dae` 替换示例中的节点与订阅。
+首次使用前编辑 `/etc/honk/config.d/node.dae` 填入节点和订阅。
 
-## 控制面板 (Doona)
+## 面板
 
-![Doona 控制面板](PIC/PIC.jpg)
+Doona 静态资源随 `luci-app-honk` 安装到 `/etc/honk/doona`，随上游 master 同步（无本地定制）。
+doona-lite 由 `download_dashboard.sh` 在运行时下载到 `/etc/honk/doona-lite`。
 
-> [!NOTE]
-> 当前 **Doona** 控制面板仍在积极开发中。如需尝试体验相关功能（如 Native API、配置在线编辑与 GeoData 规则集更新等），需要自行替换 debug 版本的 `honk-core` 核心（替换路径为 `/usr/bin/honk-core`）。
+## 版本更新
 
-## 维护与版本更新
+- `scripts/update_honk_version.sh`：**配合「下载 release」写的**，会更新 tag 与 SHA256。
+  不要用上游新版覆盖——上游版依赖 `HONK_SRC_VERSION`，会把本仓库的 Makefile 改坏。
+- `scripts/update_doona.sh`：同步 Doona 面板。上游靠 `update-honk.yml` 定时调用这两个脚本
+  并自动提交；本仓库的 CI 目前只调用它们、没有自动回写 git，面板落后时需手动同步。
 
-维护者可通过自带脚本自动获取 upstream 最新 Release 并更新版本号：
+## 合并上游
 
-```bash
-./scripts/update_honk_version.sh
-```
+见 `MERGE-PROMPT.md`（流程与裁决原则）、`MERGE-NOTES.md`（历次记录）、`REVIEW.md`（校验记录）。
+上次合并到的上游 commit：`9936045ac52ca46a48f57f86fae1af8fa0e9134b`（2026-11-09）。

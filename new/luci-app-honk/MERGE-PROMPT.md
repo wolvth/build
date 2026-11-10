@@ -1,108 +1,117 @@
 # 上游合并交接文档（MERGE-PROMPT.md）
 
-> **用途**：上游 `QiuSimons/luci-app-honk` 更新后，把本文件（可选附 MERGE-NOTES.md / REVIEW.md）
-> 交给 AI，配合文末的"任务提示词"即可完成合并。
-> **建议**：把本文件连同 MERGE-NOTES.md、REVIEW.md 提交进你的仓库（如 `new/luci-app-honk/`），
-> 下次直接让 AI 读仓库里的这份文档。
+> **用途**：上游 `QiuSimons/luci-app-honk` 更新后，把本文件交给 AI 即可按同样的方法合并。
+> 本文档于 2026-11-10 第二次合并时按实测重写。旧版「只维护 4 个文件」的说法**不成立**。
 
 ---
 
 ## 一、背景（AI 必读）
 
-- **上游仓库**：<https://github.com/QiuSimons/luci-app-honk>（OpenWrt LuCI 插件，master 分支）
-- **我的定制仓库**：<https://github.com/wolvth/build>，插件在 `new/luci-app-honk/luci-app-honk/` 下
-- 两边目录层级不同（我这边多一层 `new/luci-app-honk/`），**`git merge` 对不上路径，不能直接用**，
-  必须用 `git merge-file` 逐文件做三方合并（脚本见第三节）
-- **我只维护以下 4 个前端文件，合并范围仅限它们，其他文件一律不动**：
+- **上游**：<https://github.com/QiuSimons/luci-app-honk>（master 分支）
+- **定制仓库**：<https://github.com/wolvth/build>，插件在 `new/luci-app-honk/`
+- 两边目录层级不同（多一层 `new/luci-app-honk/`），**不能 `git merge`**，
+  必须逐文件用 `git merge-file` 做三方合并
+- **上次合并到的上游 commit（= 下次的 merge base）**：
+  `9936045ac52ca46a48f57f86fae1af8fa0e9134b`（2026-11-09）
+- ⚠️ 每次合并完成后，把上面的 commit 更新为本次合并到的上游 commit
 
-  | 文件（相对 `luci-app-honk/root/www/luci-static/resources/`） | 说明 |
-  | --- | --- |
-  | `honk/common.js` | 公共库，我的定制最重 |
-  | `view/honk/global.js` | 全局设置页 |
-  | `view/honk/dashboard.js` | 仪表盘页（我没改过） |
-  | `view/honk/log.js` | 日志页（几乎没改） |
+### 定制范围（实测）
 
-- **上次合并到的上游 commit（= 下次的 merge base）**：`7d28003261b1`（2026-10-11 "Avoid stale polling after reloads"）
-- ⚠️ 每次合并完成后，把本节的 commit 号更新为"本次合并到的上游 commit"
+带本地定制、必须三方合并的文件（路径相对 `new/luci-app-honk/`）：
+
+| 文件 | 定制内容 |
+| --- | --- |
+| `honk/Makefile` | 下载 release + stock-malloc + postinst 默认禁用 |
+| `honk/files/honk.config` | `option enabled '1'` |
+| `honk/files/honk.init` | dae/honk 互斥检查、`/var/log/honk`、清版本缓存 |
+| `luci-app-honk/Makefile` | 不依赖 `+honk`、PKG_RELEASE、依赖裁剪 |
+| `luci-app-honk/po/zh_Hans/honk.po` | 定制 msgid 翻译 |
+| `luci-app-honk/root/etc/uci-defaults/luci-honk` | 清理 auto-subscribe 残留选项 |
+| `luci-app-honk/root/usr/share/rpcd/ucode/honk.uc` | 进程探针、自启动、服务控制、连接地址 RPC |
+| `.../resources/honk/common.js` | 自定义状态栏、明暗调色板、连接地址、保存流程、标签全显示 |
+| `.../resources/honk/dashprofiles.js` | 面板配置 |
+| `.../resources/view/honk/global.js` | 无 enabled/advanced、变更检测保存流程 |
+| `.../resources/view/honk/log.js` | 末尾空行 |
+
+无定制、可直接取上游的：`dashboard.js`、`acl.d/luci-app-honk.json`、
+`config.d/dns.dae`、`download_dashboard.sh`、`scripts/update_doona.sh`，
+以及整个 `root/etc/honk/doona/` 面板目录（**没有定制**，旧文档说「带定制壁纸」是错的）。
+`README.md` 取上游骨架后需按本仓库实际情况改写。
+
+**两个例外**：
+- `scripts/update_honk_version.sh` 必须保留本地版（见第二节）
+- 上游 `.github/` 与 `.gitignore` 属于上游仓库自身，不要引入本目录
 
 ## 二、必须保留的定制（冲突裁决原则）
 
-解决冲突时：**我的定制功能 > 上游的行为改动；上游的 bug 修复/机制改进必须吸收**。具体：
+**我的定制功能 > 上游的行为改动；上游的 bug 修复 / 机制改进必须吸收。**
 
-1. **自定义状态栏**（common.js `renderStatusHeader`）：CPU/RSS/threads/uptime/版本号、
-   自启动开关、启动/重启/停止/重载按钮 —— 一个都不能少；
-   模块级 `updateStatus` 通过 `_statusRenderer` 钩子委派给它，不允许退化成上游简版显示；
-   钩子注销时要做身份判断（`_statusRenderer === updateStatus`），防止旧状态头误清新注册。
-2. **连接地址组件**：`renderConnectionUrl` / `refreshConnectionUrl`（global.js 面板下拉旁）。
-3. **global.js 表单**：无 `enabled`/`advanced` 选项；dashboard 下拉由 `dashprofiles` 动态生成。
-4. **global.js `handleSaveApply` 的变更检测流程**（不要退回上游的无脑 apply）：
-   - 保存前后比对 `/etc/honk/config.dae`，区分 改配置 / 换面板 / 无变更；
-   - 改配置 → `honk.callHonkRestart()` + `waitForHonkState(true)`（主配置需 **restart**，reload 不够）；
-   - 换面板 → `honk.switchDashboardAndWait(...)`；
-   - 无变更 → 不动服务；
-   - 用 `uci.changes()` 判断有无暂存 uci 变更：**有才** `ui.changes.apply`，
-     没有就跳过（否则 LuCI 弹"没有待应用的更改"误导用户）。
-5. **`createConfigFileView`**（API/DNS/节点/路由页共用）：保持精简保存逻辑
-   （`needRestart ? callHonkRestart() : callHonkReload()` + 各自的成功提示）；
-   `api.js` 是 `needRestart=true`（restart），DNS/节点/路由是 reload。
-   注意：不要做跨页面的逻辑去重/重构（用户明确要求不动就保持现状）。
-6. **上游的轮询/生命周期修复必须吃进来**：如 `addElementPoll`（元素卸载自动注销轮询）、
-   `waitForHonkState` 后刷新状态等。
+1. `honk/Makefile` 保持「下载预编译 release」结构。上游已改为按 commit 自编译
+   （`build_honk_core.sh` + `honk_toolchain.sh`，需 Rust/Zig/bpf-linker），**不要跟随**；
+   两个脚本可随仓库保留但不调用。可吸收与打包无关的修正（如 `PKG_LICENSE_FILES`）。
+2. `scripts/update_honk_version.sh` **保留本地版**：它更新 release tag 与 SHA256；
+   上游新版依赖 `HONK_SRC_VERSION`，会改坏 Makefile 并污染 CI。
+3. **所有标签页常态显示**：`common.js` 的 `applyTabVisibility` 保持「不隐藏」。
+   上游新版按 `advanced` / `dashboard` 隐藏页面，并在 `createConfigFileView` 里加
+   `hiddenTabReason` 拦截——本仓库已删掉 `advanced` 选项，照搬会拦住 dns/node/route
+   编辑页。合并时**移除该拦截逻辑**，但补齐上游新接口 `refreshTabVisibility`
+   （`dashboard.js` 切换面板时会调用）。
+4. `common.js` 编辑器：采用上游全宽布局（`.honk-code-row` / `.honk-editor`），
+   颜色继续用本地明暗调色板 `C`，不要换成上游 `light-dark()`。
+5. 自定义状态栏（`_statusRenderer`）、连接地址组件、global.js 的变更检测保存流程
+   （配置变 → restart；面板变 → switchDashboardAndWait；无变更 → 不动服务；
+   只在有暂存 uci 变更时才 `ui.changes.apply`）一个都不能少。
+6. doona 面板**没有定制**，直接整体替换为上游最新版（删旧文件、补新文件），不要三方合并。
+7. `luci-app-honk/Makefile` 保留「不依赖 `+honk`」，但跟随上游加 `+unzip`
+   （doona-lite 部署脚本需要）。
 
-## 三、合并方法（三方合并脚本）
+## 三、合并方法
 
 ```bash
-# 一次性：把上游加为 remote
-git remote add upstream https://github.com/QiuSimons/luci-app-honk.git
-git fetch upstream
+# amd（/root/github/build 需要 sudo -n）
+git fetch https://github.com/QiuSimons/luci-app-honk.git master:refs/remotes/honk-upstream/master
+git bundle create /root/honk-merge/pre-merge-$(date +%Y%m%d).bundle --all   # 备份
+git branch backup/honk-pre-merge-$(date +%Y%m%d) main
 
-BASE=7d28003261b1   # ← 上次合并到的上游 commit（见第一节，每次合并后更新）
-NEW=upstream/master
-
-DIR=new/luci-app-honk/luci-app-honk/root/www/luci-static/resources
-for f in honk/common.js view/honk/dashboard.js view/honk/global.js view/honk/log.js; do
-  git show $BASE:luci-app-honk/root/www/luci-static/resources/$f > /tmp/base.js
-  git show $NEW:luci-app-honk/root/www/luci-static/resources/$f > /tmp/up.js
-  # 三方合并：ours=我的版本，base=上次合并点，theirs=上游最新
-  git merge-file -p --diff3 "$DIR/$f" /tmp/base.js /tmp/up.js > /tmp/merged.js \
-    && cp /tmp/merged.js "$DIR/$f" \
-    || { echo "!!! $f 有冲突，按第二节原则处理 /tmp/merged.js 里的 <<<<<<< 标记"; cp /tmp/merged.js "$DIR/$f"; }
-done
-node --check "$DIR/honk/common.js" && node --check "$DIR/view/honk/global.js"
+# 三份快照用 stdout 直接回传本地，不必堆 /tmp
+git archive HEAD:new/luci-app-honk | gzip -c
+git archive <BASE> | gzip -c
+git archive refs/remotes/honk-upstream/master | gzip -c
 ```
 
-要点：
-- **base 必须是"上次合并到的上游 commit"**，绝不能拿最新上游当 base（分不清哪边是定制）。
-- `git merge-file` 退出码 = 冲突块数；0 = 全自动合并成功。
-- 若不确定 base：找一个我没改过的文件（如 `dashboard.js`），用两边 blob sha 比对上游提交历史即可精确定位。
-- 上游若新增了**新文件**且有用，先问我要不要引入，不要自作主张加进 4 文件之外。
+本地解压为 `local/` `base/` `upstream/`，以 `upstream/` 为底建 `merged/`，然后逐文件：
 
-## 四、合并后的验证清单
-
-- [ ] `node --check` 四个文件全部通过
-- [ ] `'require xxx'` 声明与实际引用一致（`poll`/`dom`/`ui`/`uci`…）
-- [ ] 导出表无重复键、无悬空标识符；调用点用到的符号（如 `addElementPoll`）都已导出
-- [ ] 第二节的定制功能点逐项核对（尤其自定义状态栏样式、连接地址、global.js 变更检测流程）
-- [ ] 行尾统一 LF
-- [ ] 语法没问题 ≠ 逻辑没问题：过一遍 review（参考 REVIEW.md 的检查表）
-
-## 五、任务提示词（直接复制给 AI）
-
-```
-请帮我把上游 QiuSimons/luci-app-honk 的更新合并到我的定制版 wolvth/build。
-
-先读这个文档：MERGE-PROMPT.md（在仓库 new/luci-app-honk/ 下；
-同目录的 MERGE-NOTES.md 是上次合并的完整记录，REVIEW.md 是 review 检查表，可参考）。
-
-要求：
-1. 只改文档第一节列出的 4 个文件，其他文件不要动；
-2. 用文档第三节的 git merge-file 三方合并方法，merge base 用文档里记录的 commit；
-3. 冲突按第二节的裁决原则处理：保留我的定制功能，吸收上游的修复/机制改进；
-4. 合并后按第四节清单验证（至少 node --check + 逐项核对定制功能）；
-5. 给我变更清单：每个文件改了什么、为什么、哪些是上游的改动哪些是你的裁决。
-6. 完成后提醒我更新文档第一节的 merge base commit。
+```bash
+git merge-file -p --diff3 "local/$f" "base/$f" "upstream/$f" > "merged/$f"
 ```
 
----
+- 退出码 = 冲突块数；`--diff3` 会带出 base 段，便于裁决
+- **先分类再合并**：用 blob sha 比对「本地 = base / = 上游某个历史 commit / 从未在上游出现过」，
+  区分「我的定制」与「只是停在 upstream 旧版本」。后者直接取上游，不要三方合并，
+  否则会拿错 base、产生伪冲突
+- doona 目录直接用 `upstream/` 覆盖
+- 改完先在本地校验，再整体回传 amd 覆盖 `new/luci-app-honk/` 并提交
 
-*本文件由 2026-10-12 的合并工作生成（那次合并的详细过程见 MERGE-NOTES.md，review 记录见 REVIEW.md）。*
+## 四、合并后验证清单
+
+- [ ] 全目录无 `<<<<<<<` / `=======` / `>>>>>>>` 残留
+      （doona 的 `THIRD-PARTY-NOTICES.txt` 有 `====` 分隔线，是误报）
+- [ ] `node --check` 所有 `.js`；`sh -n` 所有 `.sh` / `honk.init` / `luci-honk`
+- [ ] po：LuCI 的 po 没有 gettext header，`msgfmt -c` 必然报「header missing」；
+      校验内容时补一个临时 header 再跑，并确认 msgid/msgstr 数量相等、无重复
+- [ ] `honk/Makefile` 仍是下载 release 结构，`Build/Compile` 里没有 `build_honk_core.sh`
+- [ ] `common.js` 导出表含 `applyTabVisibility` / `applyAdvancedTabVisibility` /
+      `refreshTabVisibility`，且没有悬空的 `hiddenTabReason` 引用
+- [ ] doona-lite 链路齐全：dashprofiles.js / acl.d / honk.uc / download_dashboard.sh
+- [ ] doona 目录文件清单 == 上游 master
+- [ ] 行尾 LF
+
+## 五、任务提示词
+
+```
+请帮我把上游 QiuSimons/luci-app-honk 的更新合并到定制版 wolvth/build。
+先读 new/luci-app-honk/MERGE-PROMPT.md（同目录 MERGE-NOTES.md / REVIEW.md 是历史记录）。
+要求：按第二节裁决原则保留定制、吸收上游修复；按第三节做三方合并，merge base 用第一节
+记录的 commit；合并后按第四节清单验证；给我变更清单：每个文件改了什么、为什么、
+哪些是上游改动哪些是裁决；完成后提醒我更新第一节的 merge base commit。
+```

@@ -8,6 +8,7 @@
 'require dom';
 'require view';
 'require form';
+'require session';
 
 function showNotification(title, children, type, timeout) {
 	timeout = (timeout != null) ? timeout : 3000;
@@ -433,11 +434,14 @@ function ensureEditorStyles() {
 		'.honk-status-field { display: inline-flex !important; align-items: center !important; justify-content: flex-start !important; gap: 16px !important; flex-wrap: wrap !important; min-height: 32px !important; }',
 		'.honk-editor-toolbar { margin-bottom: 6px !important; margin-top: 0 !important; display: flex !important; align-items: center !important; justify-content: flex-start !important; }',
 		'.cm-format-btn { margin: 0 !important; cursor: pointer !important; }',
-		'.cbi-value:has(.CodeMirror) { align-items: flex-start !important; }',
-		'.cbi-value:has(.CodeMirror) > .cbi-value-title { padding-top: 5px !important; flex-grow: 0 !important; }',
-		'.cbi-value:has(.CodeMirror) .cbi-value-field { flex: 1 1 0% !important; min-width: 0 !important; width: auto !important; }',
-
-		/* ===== CodeMirror 主题（跟随明暗）===== */
+		// The editor is the content of its row: label on top, editor across the
+		// full width, toolbar above it instead of beside it.
+		'.honk-code-row { display: block !important; }',
+		'.honk-code-row > .cbi-value-title { display: block !important; width: auto !important; flex: none !important; padding: 0 0 6px 0 !important; }',
+		'.honk-code-row > .cbi-value-field { display: block !important; width: auto !important; flex: none !important; }',
+		'.honk-editor { display: block !important; width: 100% !important; min-width: 0 !important; }',
+		'.honk-editor > .CodeMirror { width: 100% !important; }',
+		// Colours below keep our custom light/dark palette (C above).
 		'.CodeMirror {',
 		'	border: 1px solid ' + C.border + ' !important;',
 		'	border-radius: 4px;',
@@ -694,10 +698,21 @@ function initCodeMirror(textarea, onSaveCallback) {
 
 		var toolbar = E('div', { 'class': 'honk-editor-toolbar' }, [ formatBtn ]);
 
+		// Toolbar and editor share one full width box: some themes lay the form
+		// field out as a flex row, which would otherwise squeeze the editor into
+		// the space left of the button instead of using the width of the row.
 		var wrapper = editor.getWrapperElement();
-		if (!wrapper.previousElementSibling || !wrapper.previousElementSibling.classList.contains('honk-editor-toolbar')) {
-			wrapper.parentNode.insertBefore(toolbar, wrapper);
-		}
+		var holder = E('div', { 'class': 'honk-editor' });
+
+		wrapper.parentNode.insertBefore(holder, wrapper);
+		holder.appendChild(toolbar);
+		holder.appendChild(wrapper);
+
+		var row = textarea.closest('.cbi-value');
+		if (row)
+			row.classList.add('honk-code-row');
+
+		editor.refresh();
 
 		if (window.IntersectionObserver) {
 			var observer = new IntersectionObserver(function(entries) {
@@ -789,6 +804,14 @@ function applyTabCss(hiddenTabs) {
 	}
 }
 
+// The service changes the stored settings on its own when the dashboard is
+// switched, so re-read them before the page picks the menu it paints from.
+function refreshTabVisibility() {
+	uci.unload('honk');
+
+	return applyTabVisibility();
+}
+
 function ensureServiceStyles() {
 	if (document.getElementById('honk-service-custom-style')) return;
 
@@ -849,6 +872,9 @@ function refreshConnectionUrl() {
 		dom.content(container, [ label, E('em', {}, _('Panel not configured')) ]);
 	});
 }
+
+// Start right away: the theme's navigation may still be on its way.
+applyTabVisibility();
 
 function renderStatusHeader() {
 	ensureServiceStyles();
@@ -984,8 +1010,6 @@ function renderStatusHeader() {
 			_statusRenderer = null;
 	});
 
-	applyTabVisibility();
-
 	return section;
 }
 
@@ -994,6 +1018,7 @@ return baseclass.extend({
 	// === tab 可见性 ===
 	applyTabVisibility: applyTabVisibility,
 	applyAdvancedTabVisibility: applyTabVisibility,
+	refreshTabVisibility: refreshTabVisibility,
 
 	// === 服务状态 / 操作 ===
 	callHonkStatus: callHonkStatus,

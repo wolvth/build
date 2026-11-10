@@ -322,6 +322,9 @@ msgstr "面板未配置"
 msgid "Doona"
 msgstr "Doona"
 
+msgid "Doona Lite"
+msgstr "Doona Lite"
+
 msgid "Native API is configured, but dashboard files are missing in the UI directory. You can download and deploy it directly."
 msgstr "Native API 已配置，但 UI 目录中缺少面板文件。您可以直接下载并部署。"
 
@@ -363,6 +366,18 @@ msgstr "切换面板失败："
 
 msgid "No configuration changes detected."
 msgstr "未检测到配置变更。"
+
+msgid "Saved, but the panel files are not installed yet — download the panel first."
+msgstr "配置已保存，但面板文件尚未安装，请先下载面板。"
+
+msgid "This page belongs to the advanced mode. Enable Advanced Settings in the global settings to use it."
+msgstr "此页面属于高级模式，请先在全局设置中启用「高级设置」。"
+
+msgid "This page belongs to a web dashboard. Select one in the global settings to use it."
+msgstr "此页面属于 Web 管理面板，请先在全局设置中选择面板类型。"
+
+msgid "Open Global Settings"
+msgstr "前往全局设置"
 
 msgid "Global configuration saved and service restarted."
 msgstr "全局配置已保存并重启服务。"

@@ -7,13 +7,14 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-honk
 PKG_VERSION:=1.1.4
-PKG_RELEASE:=2
+PKG_RELEASE:=13
 
 LUCI_TITLE:=LuCI support for honk
 LUCI_PKGARCH:=all
-LUCI_DEPENDS:=+luci-base +rpcd-mod-ucode
+# +honk is intentionally left out (core is installed separately); +unzip is
+# required by the upstream doona-lite dashboard deployment script.
+LUCI_DEPENDS:=+luci-base +rpcd-mod-ucode +unzip
 
 include $(TOPDIR)/feeds/luci/luci.mk
 
 # call BuildPackage - OpenWrt buildroot signature
-

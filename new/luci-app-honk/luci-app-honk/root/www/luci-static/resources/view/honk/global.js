@@ -82,6 +82,10 @@ return view.extend({
 			var newDash = uci.get('honk', sid, 'dashboard') || 'none';
 			var dashChanged = (newDash !== oldDash);
 
+			// The menu the reloaded page paints from has to match the new settings,
+			// and LuCI reloads before the view renders again.
+			honk.applyTabVisibility();
+
 			return honk.readFile('/etc/honk/config.dae').then(function(now) {
 				var fileChanged = ((now || '') !== configBefore);
 				var pre;

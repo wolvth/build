@@ -1,5 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+# NOTE: This package intentionally keeps the "download a prebuilt release"
+# flow. Upstream switched to building honk-core from a pinned git commit
+# (build_honk_core.sh / honk_toolchain.sh), which requires Rust, Zig and
+# bpf-linker on the build runner. Those scripts are shipped alongside for
+# reference but are NOT called by this Makefile. Keeping this flow also keeps
+# the stock-malloc build (lower RSS on small gateways) and the postinst hook.
+
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=honk
@@ -16,7 +23,7 @@ HONK_HASH_X86_64:=0714b035fb39efcdd9ab5f8b759ccd647847b3fe293ed51b4fafe11603834e
 HONK_HASH_AARCH64:=d63a51bf922899ababf5bbddc9913a4a7a6df17fbbeb021a127b85bc740e0568
 
 PKG_LICENSE:=AGPL-3.0-only
-PKG_LICENSE_FILE:=LICENSE
+PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=luci-app-honk maintainers
 
 ifeq ($(ARCH),x86_64)

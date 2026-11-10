@@ -1,5 +1,33 @@
 # 合并版 Review 记录
 
+## 2026-11-10 第二次合并校验
+
+| 项 | 结果 |
+| --- | --- |
+| 全目录冲突标记 | ✅ 无残留（doona `THIRD-PARTY-NOTICES.txt` 的 `====` 是分隔线，误报） |
+| `node --check` 全部 JS | ✅ 通过 |
+| `sh -n` 全部 sh / `honk.init` / `luci-honk` | ✅ 通过 |
+| po（补临时 header 后 `msgfmt -c`） | ✅ 通过；128 对 msgid/msgstr、无重复 |
+| `common.js` 导出表 | ✅ `applyTabVisibility` / `applyAdvancedTabVisibility` / `refreshTabVisibility` 齐全，无悬空 `hiddenTabReason` |
+| `honk/Makefile` | ✅ 仍是下载 release 结构，`Build/Compile` 不含 `build_honk_core.sh` |
+| doona-lite 链路 | ✅ dashprofiles.js / acl.d / honk.uc / download_dashboard.sh 四处齐全 |
+| doona 面板 | ✅ 等于上游 master（139 文件） |
+| 行尾 | ✅ LF |
+
+### 知情决策（非遗漏）
+
+- 上游 `light-dark()` 配色未采用，保留本地明暗调色板 `C`；只吸收编辑器全宽布局修复。
+- 上游「按 advanced/dashboard 隐藏页面」未采用：本仓库已删 `advanced` 选项，
+  照搬会拦住 dns/node/route 编辑页，相关 `renderHiddenPage` / `hiddenTabReason` 已移除；
+  但补齐了 `refreshTabVisibility` 供 `dashboard.js` 调用。
+- 上游 jemalloc/mimalloc 环境变量并入 `honk.init`，对当前 stock-malloc 核心无作用。
+- `msgfmt -c` 直接跑会报「header missing」：local / base / upstream / merged 四个版本
+  一致，属 LuCI po 固有格式，不是合并引入的回归。
+
+---
+
+> 以下为 2026-10-12 的历史 review 记录。
+
 > 2026-10-12 ｜ 对象：`honk-merge-out/` 四个合并文件（只针对这 4 个文件，其他文件未处理）
 
 ## 一、核对通过的项

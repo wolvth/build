@@ -1,5 +1,35 @@
 # luci-app-honk 定制版 × 上游更新 合并说明
 
+## 最新一次合并：2026-11-10
+
+- **上游**：`QiuSimons/luci-app-honk` master `9936045ac52ca46a48f57f86fae1af8fa0e9134b`
+  （2026-11-09）；上次 base `7d28003261b1`（2026-10-11），中间 **47 个提交**
+- **文档校正**：旧文档「只维护 4 个前端文件、其他一律不动」不成立——实测
+  **11 个文件带定制**，另有 3 个只是停在上游旧版本；doona 面板**没有定制**，
+  本次已整体替换为上游最新（139 文件），旧文件删除、新文件补齐。
+- **范围**（用户确认）：全量对齐 + 保留下载 release 打包方式 + doona 跟随上游。
+- **主要裁决**：
+  - `honk/Makefile`：保留下载 release / stock-malloc / postinst 默认禁用，
+    **未跟随**上游自编译；上游两个构建脚本引入但不调用；吸收 `PKG_LICENSE_FILES` 修正。
+  - `scripts/update_honk_version.sh`：保留本地版（上游新版依赖 `HONK_SRC_VERSION`，
+    会改坏 Makefile 与 CI）。
+  - `common.js`（9 处冲突）：编辑器布局用上游全宽修复、颜色保留本地调色板；
+    标签可见性保留「全部显示」，移除上游 `hiddenTabReason` 页面拦截，
+    补齐 `refreshTabVisibility`；状态栏 / 连接地址 / 保存流程定制全部保留。
+  - `global.js`：保留变更检测保存流程，补上游 `applyTabVisibility()` 调用。
+  - `luci-app-honk/Makefile`：`PKG_RELEASE` → 13，保留不依赖 `+honk`，加 `+unzip`。
+  - `po`：本地定制 msgid 与上游新增 3 条 msgid 全部保留。
+  - `honk.init`：并入上游内存参数（对当前 stock-malloc 核心无效但无害）。
+  - doona-lite 链路（dashprofiles / acl.d / honk.uc / download_dashboard.sh）全部合入。
+- **备份**：amd `/root/honk-merge/pre-merge-20261110.bundle`（34M）+
+  分支 `backup/honk-pre-merge-20261110`
+- **下次合并 base = `9936045ac52ca46a48f57f86fae1af8fa0e9134b`**
+
+---
+
+> 以下第一～六节为 2026-10-12 的历史记录；其中「只维护 4 个文件」与
+> 「doona 是带定制壁纸的构建」两处说法已被实测推翻，以 `MERGE-PROMPT.md` 为准。
+
 > 生成时间：2026-10-12
 > 上游：<https://github.com/QiuSimons/luci-app-honk> (master, 2026-10-11)
 > 你的定制：<https://github.com/wolvth/build> (main, new/luci-app-honk/)
