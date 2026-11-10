@@ -136,15 +136,20 @@ cat > "$ROOT/lib/apk/packages/honk.conffiles" <<'CONF'
 /etc/honk/state/
 CONF
 
+# sysupgrade 配置保留清单。OpenWrt 构建系统会按 conffiles 自动生成这一项，
+# 手工 mkpkg 不会；设备上 r2 是装完后手工补的，这里在打包阶段补齐。
+mkdir -p "$ROOT/lib/upgrade/keep.d"
+install -m 0644 "$ROOT/lib/apk/packages/honk.conffiles" "$ROOT/lib/upgrade/keep.d/honk"
+
 : > "$ROOT/lib/apk/packages/honk.conffiles_static"
 for f in /etc/config/honk /etc/honk/config.dae; do
   printf '%s %s\n' "$f" "$(hash_file "$ROOT$f")" \
     >> "$ROOT/lib/apk/packages/honk.conffiles_static"
 done
 
-# .list contains payload files only (the lib/apk/packages/*.db files are
-# generated afterwards by the build system, so they are not listed).
-(cd "$ROOT" && find etc usr -type f | sed 's|^|/|' | sort) \
+# .list contains payload files plus the generated keep.d; the
+# lib/apk/packages/*.db files are packaging metadata and are not listed.
+(cd "$ROOT" && find etc usr lib/upgrade -type f | sed 's|^|/|' | sort) \
   > "$ROOT/lib/apk/packages/honk.list"
 
 cat > "$WORK/post-install" <<'POST'

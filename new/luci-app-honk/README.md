@@ -187,8 +187,9 @@ APK_BIN=/path/to/sdk/staging_dir/host/bin/apk \
 - 参数：`--arch aarch64|x86_64`、`--release N`、`--output-dir`、`--apk-bin`、`--dry-run`
 - 从 `honk/Makefile` 读取 tag / 变体 / 双架构 SHA256，下载后校验；解压不用
   `--strip-components`（兼容 BusyBox tar）
-- 生成 conffiles、conffiles_static、post-install（默认禁用服务）与 depends，
-  与设备已装 `r2` 包逐项一致
+- 生成 conffiles、conffiles_static、`lib/upgrade/keep.d/honk`（sysupgrade 配置保留）、
+  post-install（默认禁用服务）与 depends；payload 与设备已装 `r2` 逐项一致，
+  keep.d 是补齐手工包原本缺的一项（设备上是装完后手工补入的）
 - **注意**：设备上的运行时 `apk` 没有 `mkpkg` 子命令，必须用 SDK 的
   `staging_dir/host/bin/apk`；本仓库 CI 未跑过这一步
 
