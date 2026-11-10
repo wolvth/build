@@ -11,6 +11,9 @@
 - **定制仓库**：<https://github.com/wolvth/build>，插件在 `new/luci-app-honk/`
 - 两边目录层级不同（多一层 `new/luci-app-honk/`），**不能 `git merge`**，
   必须逐文件用 `git merge-file` 做三方合并
+- **定制主要在 LuCI 页面**（common.js / global.js / honk.uc / po 等）；`honk/`
+  核心包基本沿用上游结构，打包细节（下载 release、`HONK_SUFFIX`、资产变体）
+  不是主动定制，别当成需要保留的偏好
 - **上次合并到的上游 commit（= 下次的 merge base）**：
   `9936045ac52ca46a48f57f86fae1af8fa0e9134b`（2026-11-09）
 - ⚠️ 每次合并完成后，把上面的 commit 更新为本次合并到的上游 commit
@@ -21,7 +24,7 @@
 
 | 文件 | 定制内容 |
 | --- | --- |
-| `honk/Makefile` | 下载 release + stock-malloc + postinst 默认禁用 |
+| `honk/Makefile` | 沿用上游旧版下载 release 结构 + postinst 默认禁用（非主动定制）|
 | `honk/files/honk.config` | `option enabled '1'` |
 | `honk/files/honk.init` | dae/honk 互斥检查、`/var/log/honk`、清版本缓存 |
 | `luci-app-honk/Makefile` | 不依赖 `+honk`、PKG_RELEASE、依赖裁剪 |
@@ -50,8 +53,9 @@
    （`build_honk_core.sh` + `honk_toolchain.sh`，需 Rust/Zig/bpf-linker），**不要跟随**；
    两个脚本可随仓库保留但不调用。可吸收与打包无关的修正（如 `PKG_LICENSE_FILES`）。
    `daeuniverse/honk` 仍在发布预编译 release，所以 core 可以照这条路升级：
-   当前钉 `v0.1.0-beta.6` / `0.1.0_beta6` / `stock-full`，升级用
-   `bash scripts/update_honk_version.sh --tag <tag> --variant full`，
+   当前钉 `v0.1.0-beta.6` / `0.1.0_beta6`，变体跟随上游
+   （空 `HONK_SUFFIX` + `-native-api`；上游 10/29 起不再用 `-stock`），升级用
+   `bash scripts/update_honk_version.sh --tag <tag> --variant native-api`，
    **不要把 Makefile 还原成旧的 `debug.2026.10.21.1` 或丢掉 `HONK_VARIANT`**。
    上游最新（按日期 commit 命名）的 core 只通过自编译分发，要拿那个必须换打包方式。
 2. `scripts/update_honk_version.sh` **保留本地版**：它更新 release tag 与 SHA256；

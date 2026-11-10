@@ -4,8 +4,9 @@
 # flow. Upstream switched to building honk-core from a pinned git commit
 # (build_honk_core.sh / honk_toolchain.sh), which requires Rust, Zig and
 # bpf-linker on the build runner. Those scripts are shipped alongside for
-# reference but are NOT called by this Makefile. Keeping this flow also keeps
-# the stock-malloc build (lower RSS on small gateways) and the postinst hook.
+# reference but are NOT called by this Makefile. The core variant follows
+# upstream (empty HONK_SUFFIX, -native-api); local changes here are limited to
+# the postinst hook. This repo's customisation lives in the LuCI pages.
 
 include $(TOPDIR)/rules.mk
 
@@ -19,8 +20,8 @@ HONK_RELEASE_TAG:=v0.1.0-beta.6
 HONK_ASSET_TAG:=v0.1.0-beta.6
 
 # SHA256 of each release tarball, kept in sync by scripts/update_honk_version.sh.
-HONK_HASH_X86_64:=22aabbd9765e975514091c37e0853cac5c804d1da461b3171dfe487de4ccc027
-HONK_HASH_AARCH64:=d07e51a5c5c6b1cc734c096a48beb3c6a5e31816661047b8b49d3ac03a85dcc4
+HONK_HASH_X86_64:=fee105e1b55dc9a2e6d7040a629d94af7bf9fb342ebd9867f4db7b23f2481aad
+HONK_HASH_AARCH64:=77c81072732e4c592bfc14b9bdb4a36d02dd9bb2f3b2e1c887e506c3e9deef64
 
 PKG_LICENSE:=AGPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
@@ -34,10 +35,11 @@ else ifeq ($(ARCH),aarch64)
   HONK_HASH:=$(HONK_HASH_AARCH64)
 endif
 
-# Default to the stock-malloc build: lower RSS high-water on small gateways.
-# Use an empty suffix to switch back to the mimalloc build (faster QUIC).
-HONK_SUFFIX:=-stock
-HONK_VARIANT:=-full
+# Upstream dropped the -stock (stock-malloc) suffix on 2026-10-29 and has used
+# the default build with -native-api ever since. Follow upstream here so that
+# honk.init's MALLOC_CONF applies to the shipped (jemalloc) binary.
+HONK_SUFFIX:=
+HONK_VARIANT:=-native-api
 HONK_ASSET:=honk-core-$(HONK_ASSET_TAG)-$(HONK_TARGET)$(HONK_SUFFIX)$(HONK_VARIANT).tar.gz
 
 PKG_SOURCE:=$(HONK_ASSET)

@@ -14,7 +14,7 @@
 | doona 面板 | ✅ 等于上游 master（139 文件） |
 | 行尾 | ✅ LF |
 
-### honk-core beta6 校验（2026-11-10 同日追加）
+### honk-core beta6 校验（2026-11-10 同日追加，native-api 变体已复验）
 
 | 项 | 结果 |
 | --- | --- |
@@ -24,6 +24,7 @@
 | 版本串 | ✅ `honk v0.1.0-beta.6` |
 | Makefile | ✅ `Build/Compile` 仍为 `true`，postinst / DEPENDS / 定制未被改动 |
 | 脚本默认变体 | ✅ 沿用 Makefile 的 `HONK_VARIANT`，CI 不会把它切走 |
+| 变体跟随上游 | ✅ 空 `HONK_SUFFIX` + `-native-api`，native-api 资产 hash / ELF / 结构已复验 |
 
 ### 知情决策（非遗漏）
 
@@ -31,7 +32,7 @@
 - 上游「按 advanced/dashboard 隐藏页面」未采用：本仓库已删 `advanced` 选项，
   照搬会拦住 dns/node/route 编辑页，相关 `renderHiddenPage` / `hiddenTabReason` 已移除；
   但补齐了 `refreshTabVisibility` 供 `dashboard.js` 调用。
-- 上游 jemalloc/mimalloc 环境变量并入 `honk.init`，对当前 stock-malloc 核心无作用。
+- 上游 jemalloc 内存参数并入 `honk.init`；跟随上游默认二进制后 `MALLOC_CONF=retain:false` 生效。
 - `msgfmt -c` 直接跑会报「header missing」：local / base / upstream / merged 四个版本
   一致，属 LuCI po 固有格式，不是合并引入的回归。
 

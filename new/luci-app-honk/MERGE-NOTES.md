@@ -9,7 +9,7 @@
   本次已整体替换为上游最新（139 文件），旧文件删除、新文件补齐。
 - **范围**（用户确认）：全量对齐 + 保留下载 release 打包方式 + doona 跟随上游。
 - **主要裁决**：
-  - `honk/Makefile`：保留下载 release / stock-malloc / postinst 默认禁用，
+  - `honk/Makefile`：沿用上游下载 release 结构 + postinst 默认禁用（非主动定制），
     **未跟随**上游自编译；上游两个构建脚本引入但不调用；吸收 `PKG_LICENSE_FILES` 修正。
   - `scripts/update_honk_version.sh`：保留本地版（上游新版依赖 `HONK_SRC_VERSION`，
     会改坏 Makefile 与 CI）。
@@ -19,7 +19,7 @@
   - `global.js`：保留变更检测保存流程，补上游 `applyTabVisibility()` 调用。
   - `luci-app-honk/Makefile`：`PKG_RELEASE` → 13，保留不依赖 `+honk`，加 `+unzip`。
   - `po`：本地定制 msgid 与上游新增 3 条 msgid 全部保留。
-  - `honk.init`：并入上游内存参数（对当前 stock-malloc 核心无效但无害）。
+  - `honk.init`：并入上游内存参数（跟随上游默认二进制时 `MALLOC_CONF` 生效）。
   - doona-lite 链路（dashprofiles / acl.d / honk.uc / download_dashboard.sh）全部合入。
 - **备份**：amd `/root/honk-merge/pre-merge-20261110.bundle`（34M）+
   分支 `backup/honk-pre-merge-20261110`
@@ -31,13 +31,16 @@
   比 op 现装的 beta6 旧）。
 - 查明：`daeuniverse/honk` **仍在发预编译 release**，最新 `v0.1.0-beta.6`（11/8），
   带 `SHA256SUMS`；资产命名已改为 `honk-core-<tag>-<target>-<variant>.tar.gz`。
-- 处理：跑本地 `scripts/update_honk_version.sh --tag v0.1.0-beta.6 --variant full`，
+- 处理：跑本地 `scripts/update_honk_version.sh --tag v0.1.0-beta.6 --variant native-api`，
   得到 `PKG_VERSION=0.1.0_beta6`、`HONK_ASSET_TAG=v0.1.0-beta.6`、
-  `HONK_VARIANT=-full`、两架构 SHA256（与实测下载计算值一致）。
-  选 `stock-full` 是为保留 stock-malloc 降 RSS，同时带 native-api（Doona）
-  与 clash-api（zashboard）。
+  空 `HONK_SUFFIX` + `HONK_VARIANT=-native-api`、两架构 SHA256（与实测下载一致）。
+- **变体纠正（用户指出）**：`-stock` / `stock-full` 从来不是主动选的定制，是上游
+  Makefile 带过来的；本仓库定制主要在 LuCI 页面。核对上游 Makefile 历史：
+  10/27 前带 `-stock`，`849ecf3`（10/29）起清空 suffix，变体一直是 `-native-api`。
+  故最终跟随上游用空 suffix + `-native-api`；这样 `honk.init` 的 `MALLOC_CONF`
+  也对上游默认的 jemalloc 二进制生效。
 - 顺带修脚本：默认变体改为读取 Makefile 里已有的 `HONK_VARIANT`，
-  避免 CI 不带参数运行时把 `full` 悄悄切成 `native-api`。
+  避免 CI 不带参数运行时把变体改掉。
 - 验证：两个 tarball 解压后均有静态 ELF `honk-core`（x86-64 / aarch64），
   版本串 `honk v0.1.0-beta.6`，与 Makefile 的 `--strip-components=1` 匹配。
 - 注意：beta6 与 op 现装 core 同版本；上游 11/9 的 commit 版只走自编译，未采用。
