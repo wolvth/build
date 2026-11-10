@@ -26,9 +26,12 @@ set_chmod_640() {
 # daens). Used by both start_service() (mutual exclusion) and service_stopped()
 # (skip cleanup so stopping honk cannot tear down a running dae).
 dae_is_running() {
-    [ "$(uci -q get dae.config.enabled)" = 1 ] || return 1
-    ubus call service list '{"name":"dae"}' 2>/dev/null |
-        jsonfilter -q -e '@.dae.instances[*].running' | grep -q true
+    # Ask procd, exactly like dae's own init (reload_service uses
+    # `procd_running "$NAME" "$NAME"`). Do NOT gate on dae.config.enabled:
+    # that only controls whether dae may be started, and a live instance can
+    # outlive a config change. Gating on it here would let `honk stop` / the
+    # core updater tear down dae's netns while dae is actually running.
+    procd_running dae dae
 }
 
 cleanup_netns() {
