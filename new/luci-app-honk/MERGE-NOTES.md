@@ -25,6 +25,23 @@
   分支 `backup/honk-pre-merge-20261110`
 - **下次合并 base = `9936045ac52ca46a48f57f86fae1af8fa0e9134b`**
 
+### 追加：honk-core 升级（2026-11-10 同日）
+
+- 需求：用新 core（合并后仍钉 `debug.2026.10.21.1` / `2026.10.21.1_pre1`，
+  比 op 现装的 beta6 旧）。
+- 查明：`daeuniverse/honk` **仍在发预编译 release**，最新 `v0.1.0-beta.6`（11/8），
+  带 `SHA256SUMS`；资产命名已改为 `honk-core-<tag>-<target>-<variant>.tar.gz`。
+- 处理：跑本地 `scripts/update_honk_version.sh --tag v0.1.0-beta.6 --variant full`，
+  得到 `PKG_VERSION=0.1.0_beta6`、`HONK_ASSET_TAG=v0.1.0-beta.6`、
+  `HONK_VARIANT=-full`、两架构 SHA256（与实测下载计算值一致）。
+  选 `stock-full` 是为保留 stock-malloc 降 RSS，同时带 native-api（Doona）
+  与 clash-api（zashboard）。
+- 顺带修脚本：默认变体改为读取 Makefile 里已有的 `HONK_VARIANT`，
+  避免 CI 不带参数运行时把 `full` 悄悄切成 `native-api`。
+- 验证：两个 tarball 解压后均有静态 ELF `honk-core`（x86-64 / aarch64），
+  版本串 `honk v0.1.0-beta.6`，与 Makefile 的 `--strip-components=1` 匹配。
+- 注意：beta6 与 op 现装 core 同版本；上游 11/9 的 commit 版只走自编译，未采用。
+
 ---
 
 > 以下第一～六节为 2026-10-12 的历史记录；其中「只维护 4 个文件」与

@@ -5,7 +5,11 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAKEFILE="$REPO_DIR/honk/Makefile"
 
 AGGRESSIVE_MODE="${AGGRESSIVE_MODE:-false}"
-PREFERRED_VARIANT="${HONK_PREFERRED_VARIANT:-${PREFERRED_VARIANT:-native-api}}"
+
+# Keep the variant already pinned in the Makefile unless explicitly overridden.
+# Otherwise a plain CI run would silently switch e.g. stock-full -> native-api.
+CURRENT_VARIANT="$(grep '^HONK_VARIANT:=' "$MAKEFILE" 2>/dev/null | head -n 1 | cut -d= -f2- | sed 's/^-//' || true)"
+PREFERRED_VARIANT="${HONK_PREFERRED_VARIANT:-${PREFERRED_VARIANT:-${CURRENT_VARIANT:-native-api}}}"
 
 while [ $# -gt 0 ]; do
     case "$1" in

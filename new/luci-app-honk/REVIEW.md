@@ -14,6 +14,17 @@
 | doona 面板 | ✅ 等于上游 master（139 文件） |
 | 行尾 | ✅ LF |
 
+### honk-core beta6 校验（2026-11-10 同日追加）
+
+| 项 | 结果 |
+| --- | --- |
+| `SHA256SUMS` vs 实测下载 | ✅ x86_64 / aarch64 两个 hash 完全一致 |
+| tarball 结构 | ✅ 一层目录 + `honk-core`，`--strip-components=1` 能正确取出 |
+| 二进制 | ✅ 静态 ELF，x86-64 / ARM aarch64 各一份 |
+| 版本串 | ✅ `honk v0.1.0-beta.6` |
+| Makefile | ✅ `Build/Compile` 仍为 `true`，postinst / DEPENDS / 定制未被改动 |
+| 脚本默认变体 | ✅ 沿用 Makefile 的 `HONK_VARIANT`，CI 不会把它切走 |
+
 ### 知情决策（非遗漏）
 
 - 上游 `light-dark()` 配色未采用，保留本地明暗调色板 `C`；只吸收编辑器全宽布局修复。
