@@ -27,7 +27,7 @@
 | --- | --- |
 | `honk/Makefile` | 沿用上游旧版「下载 release」结构 + `postinst` 默认禁用；空 `HONK_SUFFIX` + `HONK_VARIANT:=-native-api` |
 | `honk/files/honk.config` | `option enabled '1'` |
-| `honk/files/honk.init` | dae/honk 互斥、`/var/log/honk`、`hot_reload`、清版本缓存、`DAE_LOCATION_ASSET` / `MALLOC_CONF`；`dae_is_running()` 用 `procd_running dae dae`（同 dae 自己的 init），**不看 `dae.config.enabled`**；dae 运行时跳过 netns 清理 |
+| `honk/files/honk.init` | dae/honk 互斥、`/var/log/honk`、`hot_reload`、清版本缓存、`DAE_LOCATION_ASSET` / `MALLOC_CONF`；`dae_is_running()` 用 `ubus call service list` + `instances[*].running`（同 dae init 的互斥检查），**不看 `dae.config.enabled`**；dae 运行时跳过 netns 清理 |
 | `scripts/update_honk_version.sh` | **保留本地版**（见第三节第 2 条） |
 | `scripts/build_honk_apk.sh` | **本地新增**：`apk mkpkg` 固化构建，上游无此文件 |
 

@@ -26,12 +26,14 @@ set_chmod_640() {
 # daens). Used by both start_service() (mutual exclusion) and service_stopped()
 # (skip cleanup so stopping honk cannot tear down a running dae).
 dae_is_running() {
-    # Ask procd, exactly like dae's own init (reload_service uses
-    # `procd_running "$NAME" "$NAME"`). Do NOT gate on dae.config.enabled:
-    # that only controls whether dae may be started, and a live instance can
-    # outlive a config change. Gating on it here would let `honk stop` / the
-    # core updater tear down dae's netns while dae is actually running.
-    procd_running dae dae
+    # Same probe dae's own init uses for the mutual-exclusion check
+    # (ubus service list -> instances[*].running), just pointed at dae.
+    # Do NOT gate on dae.config.enabled: that only controls whether dae may
+    # be started, and a live instance can outlive a config change. Gating on
+    # it would let `honk stop` / the core updater tear down dae's netns while
+    # dae is actually running.
+    ubus call service list '{"name":"dae"}' 2>/dev/null |
+        jsonfilter -q -e '@.dae.instances[*].running' | grep -q true
 }
 
 cleanup_netns() {
