@@ -5,7 +5,7 @@ OpenWrt 上 honk（eBPF 透明代理，兼容 dae）的 LuCI 界面与安装包�
 本目录是 [QiuSimons/luci-app-honk](https://github.com/QiuSimons/luci-app-honk) 的定制版，
 放在 `wolvth/build` 仓库的 `new/luci-app-honk/` 下（比上游多一层目录，**无法直接 `git merge`**）。
 
-**当前状态**：`luci-app-honk` 1.1.4-r18 / `honk` 0.1.0_beta6-r3 /
+**当前状态**：`luci-app-honk` 1.1.4-r18 / `honk` 0.1.0_beta6-r4 /
 i18n 0.261110.37438，`honk-core` v0.1.0-beta.6（`0.1.0_beta6`）；
 上次对齐上游 commit `9936045ac52ca46a48f57f86fae1af8fa0e9134b`（2026-11-09）。
 

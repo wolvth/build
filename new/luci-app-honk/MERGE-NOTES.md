@@ -135,3 +135,13 @@
   `core_info`、非法 tag 拒绝、lmo 新中文文案命中、162/163 md5 基线重新成立。
 - 备份：op `/root/honk-backup-20261110-1900/`（装包前）、
   `/root/honk-review-20261110/backup-20261110-1840/`（替换前）。
+
+## 十一、dae 守卫改用 ubus instances（20:01–20:06）
+
+- `honk.init` 的 `dae_is_running()` 改为 dae init 同款
+  `ubus call service list` + `jsonfilter '@.dae.instances[*].running'` 探测，
+  去掉 `dae.config.enabled` 门槛（enabled 只表示允许启动，不代表实例在跑）。
+- 提交 `b526ca5`；重打 `honk-0.1.0_beta6-r4.apk`（sha256 `f36e75c1…`）并安装：
+  installed db r4、`/etc/init.d/honk` md5 `14b34149…`、服务 running、
+  用户配置由 conffiles 保护、6 个 `.apk-new` 已清理。
+- `94b5798` 的 `procd_running` 实现已被本提交取代。
