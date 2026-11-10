@@ -99,7 +99,7 @@
 | 「`dashprofiles.js` / `log.js` 有定制」 | 无定制，差异全是上游新增/移除 |
 | merge base `7c8e5411` | 已前移到 `7d280032`，再前移到 `9936045` |
 
-## 九、代码级 review 修复（2026-11-10 18:18 起，待提交）
+## 九、代码级 review 修复（已提交 `aaa1ff3`，19:45 上线 r18/r3）
 
 - 只改实测「有定制」的文件；与上游 `9936045` 逐字节相同的 `acl.d` /
   `download_dashboard.sh` / `dashboard.js`（及仅差末尾换行的 `log.js` / `dashprofiles.js`）
@@ -114,7 +114,24 @@
 - 验证：本机 `sh -n` / `bash -n` / `node --check`、沙箱 10 场景；op 隔离目录
   BusyBox `sh -n`、`ucode -c`、`compare_version` 9 断言、沙箱 10 场景重跑、
   前端 `requireSuccess` 5 断言，全部通过。po 只验格式，界面文案未验证。
-- op 运行位置已于 18:42 替换为修复版并真机验证（rpcd 重启、14 RPC、
+- op 运行位置曾于 18:42 临时替换为修复版并真机验证（rpcd 重启、14 RPC、
   core_info、两重并发守卫、init 守卫、静态资源 md5 一致）；绕过包管理，
   下次装包 / `apk fix` 会覆盖，需重新打包固化。备份在
   `op:/root/honk-review-20261110/backup-20261110-1840/`。
+
+## 十、提交、编译、安装与基线复核（19:02–19:45）
+
+- `PKG_RELEASE` 17→18 与 9 个修复文件一起提交推送 `aaa1ff3`
+  （`d2e6db1..aaa1ff3`，10 files +253/-52），`main` = `origin/main`。
+- 重下 25.12.5 SDK（242 MB）到 amd `/root/honk-build-20261110/`，
+  `make package/luci-app-honk/compile -j2` 成功；产出
+  `luci-app-honk-1.1.4-r18.apk`、`luci-i18n-honk-zh-cn-0.261110.37438.apk`，
+  并用 `build_honk_apk.sh --release 3` 完整打包 `honk-0.1.0_beta6-r3.apk`
+  （7.1 记的「完整打包未实测」已消除）。
+- 三个包安装到 op：纯升级、conffiles 保护用户配置、6 个 `.apk-new` 已清理；
+  installed db / world checksum 全部更新，自启 S96/K10 与 honk running 保持。
+  apk 的 `1 error` 经用户确认是 dae 与自编译 `luci-app-dae` 文件冲突的环境噪音。
+- 装后验证：4 个运行文件 md5 = 修复版、core 二进制未变、14 RPC、
+  `core_info`、非法 tag 拒绝、lmo 新中文文案命中、162/163 md5 基线重新成立。
+- 备份：op `/root/honk-backup-20261110-1900/`（装包前）、
+  `/root/honk-review-20261110/backup-20261110-1840/`（替换前）。

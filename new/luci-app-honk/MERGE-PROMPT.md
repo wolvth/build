@@ -1,7 +1,7 @@
 # 上游合并交接文档（MERGE-PROMPT.md）
 
 > **用途**：上游 `QiuSimons/luci-app-honk` 更新后，把本文件交给 AI 即可按同样的方法合并。
-> 本文件以 2026-11-10 的 r17 为基准，定制清单与裁决原则均按当前代码核对过。
+> 本文件以 2026-11-10 的 r18（`aaa1ff3`）为基准，定制清单与裁决原则均按当前代码核对过。
 
 ---
 
@@ -143,6 +143,7 @@ git merge-file -p --diff3 "local/$f" "base/$f" "upstream/$f" > "merged/$f"
 - [ ] `update_core.sh`：SHA256SUMS 取不到 / 资产未列出 / hash 不符时 FAILED 且不执行、不替换 core
 - [ ] `honk.uc` 用 `ucode -c` 通过；`compare_version` 对 `beta.10 > beta.6`、正式版 > 预发布结果正确
 - [ ] `common.js` 所有写操作按钮都经过 `requireSuccess`，`update_core` 派发失败不会误报成功
+- [ ] 装包后复核：仓库 `root/` 163 文件，设备命中 162 且 md5 全部相等（唯一缺 uci-defaults）
 
 ## 六、任务提示词
 

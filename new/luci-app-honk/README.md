@@ -5,7 +5,8 @@ OpenWrt 上 honk（eBPF 透明代理，兼容 dae）的 LuCI 界面与安装包�
 本目录是 [QiuSimons/luci-app-honk](https://github.com/QiuSimons/luci-app-honk) 的定制版，
 放在 `wolvth/build` 仓库的 `new/luci-app-honk/` 下（比上游多一层目录，**无法直接 `git merge`**）。
 
-**当前状态**：`luci-app-honk` 1.1.4-r17，`honk-core` v0.1.0-beta.6（`0.1.0_beta6`）；
+**当前状态**：`luci-app-honk` 1.1.4-r18 / `honk` 0.1.0_beta6-r3 /
+i18n 0.261110.37438，`honk-core` v0.1.0-beta.6（`0.1.0_beta6`）；
 上次对齐上游 commit `9936045ac52ca46a48f57f86fae1af8fa0e9134b`（2026-11-09）。
 
 ## 软件包
@@ -224,4 +225,5 @@ APK_BIN=/path/to/sdk/staging_dir/host/bin/apk \
 - 与上游 `9936045` 逐字节相同的文件**未改**：`download_dashboard.sh` 全程 `-k`
   禁用 TLS 校验、`acl.d` 的 `luci.honk` read/write 全 `"*"`、面板自定义 URL 无主机
   白名单。这三项仍是已知风险，需上游修复或单独定制才能根治。
-- po 补齐错误路径文案后需**同步重编 `luci-i18n-honk-zh-cn`** 才会生效。
+- po 补齐错误路径文案后需**同步重编 `luci-i18n-honk-zh-cn`** 才会生效
+  （r18 已随 0.261110.37438 重编并安装，lmo 新文案实测命中）。
