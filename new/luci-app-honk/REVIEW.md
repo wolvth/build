@@ -1,163 +1,64 @@
-# 合并版 Review 记录
+# 校验记录（REVIEW.md）
 
-## 2026-11-10 第二次合并校验
+> 记录「合并 / 功能改动后实际验证了什么、发现了什么问题」。
+> 合并步骤见 `MERGE-PROMPT.md`，历史决策见 `MERGE-NOTES.md`。
 
-| 项 | 结果 |
-| --- | --- |
-| 全目录冲突标记 | ✅ 无残留（doona `THIRD-PARTY-NOTICES.txt` 的 `====` 是分隔线，误报） |
-| `node --check` 全部 JS | ✅ 通过 |
-| `sh -n` 全部 sh / `honk.init` / `luci-honk` | ✅ 通过 |
-| po（补临时 header 后 `msgfmt -c`） | ✅ 通过；128 对 msgid/msgstr、无重复 |
-| `common.js` 导出表 | ✅ `applyTabVisibility` / `applyAdvancedTabVisibility` / `refreshTabVisibility` 齐全，无悬空 `hiddenTabReason` |
-| `honk/Makefile` | ✅ 仍是下载 release 结构，`Build/Compile` 不含 `build_honk_core.sh` |
-| doona-lite 链路 | ✅ dashprofiles.js / acl.d / honk.uc / download_dashboard.sh 四处齐全 |
-| doona 面板 | ✅ 等于上游 master（139 文件） |
-| 行尾 | ✅ LF |
-
-### honk-core beta6 校验（2026-11-10 同日追加，native-api 变体已复验）
+## 当前状态（2026-11-10，r17）
 
 | 项 | 结果 |
 | --- | --- |
-| `SHA256SUMS` vs 实测下载 | ✅ x86_64 / aarch64 两个 hash 完全一致 |
-| tarball 结构 | ✅ 一层目录 + `honk-core`，`--strip-components=1` 能正确取出 |
-| 二进制 | ✅ 静态 ELF，x86-64 / ARM aarch64 各一份 |
-| 版本串 | ✅ `honk v0.1.0-beta.6` |
-| Makefile | ✅ `Build/Compile` 仍为 `true`，postinst / DEPENDS / 定制未被改动 |
-| 脚本默认变体 | ✅ 沿用 Makefile 的 `HONK_VARIANT`，CI 不会把它切走 |
-| 变体跟随上游 | ✅ 空 `HONK_SUFFIX` + `-native-api`，native-api 资产 hash / ELF / 结构已复验 |
+| 上游合并 | 47 提交全量对齐，11 个定制文件三方合并，18 处冲突裁决 |
+| core | `v0.1.0-beta.6`，`-native-api` 变体；SHA256 / tarball 结构 / 静态 ELF 均验证 |
+| LuCI 包编译 | SDK 编译通过；`apk extract` 核验 163 文件、doona 139 |
+| honk 包编译 | `make package/honk/compile` 通过（临时去 kmod / vmlinux-btf 依赖，7m37s） |
+| op 换装 | `honk-0.1.0_beta6-r2` + `luci-app-honk-1.1.4-r17` + i18n，服务 running |
+| 运行时更新核心 | 端到端通过：下载 12MB → SHA256 → 解压 → 停服 → 替换（留 `.bak`）→ 重启 → OK |
+| RPC | `luci.honk` 14 个方法（含 `core_info` / `update_core` / `update_core_status`） |
+| 前端 | 按钮配色/禁用、打开面板、下拉框宽度均在安装包内 |
+| 翻译 | 菜单「面板」、按钮「重载」、lmo 已更新 |
 
-## 2026-11-10 下午：功能增强校验（r15–r17）
+## 历史发现的有效问题（均已修复）
 
-| 项 | 结果 |
-| --- | --- |
-| `update_core` 端到端 | ✅ 下载 12MB → SHA256 → 解压 → 停服 → 替换（留 `.bak`）→ 重启 → status OK |
-| BusyBox tar 兼容 | ❌→✅ 首次因 `--strip-components` 失败（旧 core 未动、服务未停，属安全失败）；改用解压后 `find` 定位，复测通过 |
-| `ubus -v list luci.honk` | ✅ 含 `core_info` / `update_core` / `update_core_status` |
-| `core_info` | ✅ current = latest = `v0.1.0-beta.6`、has_update=false |
-| 菜单 Dashboard 标签 | ✅ 显示「面板」（title 直接写中文，绕开 base 语言包） |
-| 按钮禁用联动 | ✅ `startBtn` / `stopBtn` 接收返回值；运行中启动禁用、未运行停止禁用 |
-| 「重载」文案 | ✅ lmo 里按钮为「重载」 |
-| 面板下拉框 | ✅ 90–140px |
-| 打开面板按钮 | ✅ 点击新标签打开，未配置时禁用 |
-| 前端代码在包内 | ✅ `honk-btn-start/stop/update/open-panel`、`min-width: 90px` 均在安装后的 `common.js` |
+1. **`_statusRenderer` 注销竞态**：旧状态头卸载时会把新注册误清，导致状态栏退回上游简版。
+   修复：onDetach 加身份判断，只清理自己那笔注册。
+2. **局部数据误清自启动开关**：`waitForHonkState` 失败路径传 `{ running: false }`，
+   旧渲染器无条件改开关。修复：仅当 `data.autostart != null` 时更新。
+3. **`createConfigFileView.handleSaveApply` 缺 `.catch`**：RPC 失败无提示、未处理拒绝。
+   修复：补回 `.catch` 错误通知。
+4. **`startBtn` / `stopBtn` 未赋值**（2026-11-10）：只声明变量、没接收 `serviceButton()`
+   返回值，按钮永不 disabled。修复：先构建再放进数组。
+5. **BusyBox tar 不支持 `--strip-components`**（2026-11-10）：`update_core.sh` 解压失败。
+   修复：解压后用 `find -maxdepth 3 -name honk-core` 定位。
 
-### 知情决策（本轮）
+## 「保存并应用」静默不生效（2026-10-12 实测）
 
-- 菜单 title 直接用中文「面板」而不是英文 msgid + 翻译：LuCI 的 base 语言包会先把
-  `Dashboard` 译成「主页」，honk 域抢不过。
-- 运行时更新核心走「下载 release 替换二进制」而不是重装 ipk：避免每次更新都编译；
-  旧二进制保留 `.bak` 可回滚。
+**现象**：只改配置 → 提示「没有待应用的更改」；换面板类型正常。
 
-### 知情决策（非遗漏）
+**根因**：配置编辑器在 `handleSave` 阶段直接写 `/etc/honk/config.dae`（无 uci 变更），
+最后无条件 `ui.changes.apply(true)` 发现没有暂存变更 → 返回 204 → LuCI 弹误导提示。
 
-- 上游 `light-dark()` 配色未采用，保留本地明暗调色板 `C`；只吸收编辑器全宽布局修复。
-- 上游「按 advanced/dashboard 隐藏页面」未采用：本仓库已删 `advanced` 选项，
-  照搬会拦住 dns/node/route 编辑页，相关 `renderHiddenPage` / `hiddenTabReason` 已移除；
-  但补齐了 `refreshTabVisibility` 供 `dashboard.js` 调用。
-- 上游 jemalloc 内存参数并入 `honk.init`；跟随上游默认二进制后 `MALLOC_CONF=retain:false` 生效。
-- `msgfmt -c` 直接跑会报「header missing」：local / base / upstream / merged 四个版本
-  一致，属 LuCI po 固有格式，不是合并引入的回归。
-
----
-
-> 以下为 2026-10-12 的历史 review 记录。
-
-> 2026-10-12 ｜ 对象：`honk-merge-out/` 四个合并文件（只针对这 4 个文件，其他文件未处理）
-
-## 一、核对通过的项
-
-| 项 | 结果 |
-| --- | --- |
-| `node --check` 语法校验（4 个文件） | ✅ 全部通过 |
-| require 声明 vs 实际引用（`poll`、`dom`、`ui`、`uci`…） | ✅ 一致；dashboard/log 移除 `require poll` 后无残留 `poll.` 引用 |
-| `addElementPoll` 导出 vs 调用点（dashboard.js:588、log.js:73、common.js 内部） | ✅ 一致 |
-| 导出表：无重复键、无悬空标识符；上游新增的 `updateStatus`/`addElementPoll` 已导出 | ✅ |
-| log.js 你的定制（删末尾空行）保留 | ✅ |
-| dashboard.js 你未改过，合并结果 == 上游最新 | ✅ |
-| global.js 你的定制（无 enabled/advanced、连接地址下拉、显式 reload 流程、refreshConnectionUrl）全部保留 | ✅ |
-| common.js 你的定制（精简保存、自定义状态栏/自启动开关/CPU-RSS、连接地址、下载轮询等）全部保留 | ✅ |
-| 上游修复（`addElementPoll` 残留轮询、`waitForHonkState` 状态刷新）已并入 | ✅ |
-| 行尾统一 LF，与你仓库一致 | ✅ |
-
-## 二、发现的问题（3 个，均已修复）
-
-### 1. `_statusRenderer` 注销竞态（合并引入，中等）
-`renderStatusHeader` 的 onDetach 里直接 `_statusRenderer = null`。
-但旧元素要 2 个轮询周期（约 6s）才被判定卸载，若这期间新状态头已注册渲染器，
-旧的 onDetach 会把**新的**注册误清掉 → 状态栏退回上游简版显示（丢 CPU/RSS/自启动开关）。
-**修复**：onDetach 加身份判断，只清理自己那笔注册。
-（见 common.js `renderStatusHeader` 末尾）
-
-### 2. 局部数据误清自启动开关（合并引入，轻微）
-上游 `waitForHonkState` 失败路径会调 `updateStatus({ running: false })`，
-你的渲染器原来无条件 `setSwitchState(autostartSwitch, !!(data && data.autostart))`
-→ 把开关强制拨到"关"，而实际 autostart 状态未知。
-**修复**：仅当 `data.autostart != null` 时才更新开关。
-（见 common.js `renderStatusHeader` 内局部 `updateStatus`）
-
-### 3. `createConfigFileView.handleSaveApply` 缺 `.catch`（你的定制里带过来的，轻微）
-你精简保存流程时把错误提示分支删掉了（base 和上游都有的）：
-RPC 失败时无任何提示，且产生未处理的 Promise 拒绝。
-**修复**：补回 `.catch` 错误通知；你的精简保存逻辑（直接 reload/restart + 成功提示）不变。
-如果这是你有意为之，删掉那个 `.catch(...)` 两行即可。
-
-## 三、有意保留、未按上游改动的点（知情决策，非遗漏）
-
-- **global.js 保存流程**：保留你的显式 `callHonkReload()` + `waitForHonkState()`，
-  未采用上游"只 `ui.changes.apply` + 刷新后轮询"的重构。
-  理由：你的表单几乎不产生 uci 变更、配置直接写 `/etc/honk/config.dae`，
-  上游改法会导致"保存并应用"静默不生效。想改用上游版：见 MERGE-NOTES.md 第四节的代码段。
-- **common.js `createConfigFileView` 的成功路径**：保留你的精简版，
-  未恢复上游的 `isServiceEnabled()` / 状态二次确认逻辑（你已删掉 enabled 体系，与之配套）。
-
-## 四、建议但未替你决定
-
-- `waitForHonkState` 失败时状态栏显示 "NOT RUNNING"（上游语义：状态未知按未运行显示），
-  如想区分"未知"与"确实停了"，需要动你的渲染器文案，按需自行调整。
-
-## 五、用户实测问题修复（2026-10-12 03:20 更新）
-
-**现象**：全局页面只改配置 → 保存并应用 → 提示"没有待应用的更改"；
-切面板类型（uci 变更）→ 有 uci 写入提示、正常生效。
-
-**根因**（已对照 LuCI `luci.js`/`ui.js` 源码确认）：
-配置编辑框在 `handleSave` 阶段就直接写入 `/etc/honk/config.dae`（无 uci 变更），
-定制流程的 `callHonkReload()` 也确实重载了服务（配置已生效），
-但最后无条件调用的 `ui.changes.apply(true)` 发现服务端没有暂存的 uci 变更，
-返回 204 → LuCI 弹 "There are no changes to apply"（没有待应用的更改）→ 误导。
-
-**修复**（global.js `handleSaveApply`）：
-1. 保存前后读取 `/etc/honk/config.dae` 做内容比对，区分"改了配置 / 改了面板 / 什么都没改"；
-2. 只在必要时动服务：面板变了 → `switchDashboardAndWait`；只改配置 → **`callHonkRestart` 重启**（全局配置
-   `/etc/honk/config.dae` 修改需 restart 才生效，reload 不够）+ 等就绪；没变 → 不动服务；
-3. 用 `uci.changes()` 查询是否有暂存的 uci 变更：有 → 才走 `ui.changes.apply`；
-   没有 → 跳过 LuCI 流程（避免误导提示），直接弹明确的成功提示；
-4. 新增提示语 `Global configuration saved and service restarted.`（英文 msgid，需补 po 翻译，见下）。
-
-补 po（zh_Hans）：
-```po
-msgid "Global configuration saved and service restarted."
-msgstr "全局配置已保存并重启服务。"
-```
-
-**行为矩阵（修复后）**：
+**修复**：保存前后比对 `config.dae`；配置变 → restart，面板变 → `switchDashboardAndWait`，
+无变更 → 不动；只在 `uci.changes()` 非空时才走 `ui.changes.apply`。
 
 | 操作 | 服务 | 提示 |
 | --- | --- | --- |
-| 只改配置 → 保存并应用 | **restart 重启** + 等就绪 | "全局配置已保存并重启服务。" |
-| 换面板类型 → 保存并应用 | 切面板 + 等就绪 | LuCI apply 流程（uci 写入 + 页面刷新） |
-| 两者都改 | 切面板（顺带载入新配置） | LuCI apply 流程 |
-| 什么都没改 | 不动 | "未检测到配置变更" |
-| 另有其他页暂存的 uci 变更 | 按上述规则 | 仍会走 LuCI apply 一并提交 |
+| 只改配置 | restart + 等就绪 | 全局配置已保存并重启服务 |
+| 换面板 | 切面板 + 等就绪 | LuCI apply 流程 |
+| 都没改 | 不动 | 未检测到配置变更 |
 
-## 六、后续调整（2026-10-12 03:55 更新）
+## 知情决策（非遗漏）
 
-1. **全局页改配置改为 restart**：`/etc/honk/config.dae`（主配置）修改需 restart 才生效，
-   原来的 `callHonkReload()` 已换为重启流程；提示语改为
-   `Global configuration saved and service restarted.`（po："全局配置已保存并重启服务。"）。
-2. ~~抽取公共函数 `applyServiceChange(needRestart)`~~ **已回退**
-   （2026-10-12 04:00 用户确认该需求作废，保持各页原有逻辑、不做去重）：
-   - `createConfigFileView` 恢复为 `needRestart ? callHonkRestart() : callHonkReload()` + 成功提示；
-   - global.js 恢复为内联的 `callHonkRestart()` + `waitForHonkState(true)` 块。
-   - 已知行为（回退后恢复的原状）：reload 路径不校验 RPC 返回值，
-     RPC 返回 `{success:false}` 时仍会弹成功提示。
+- 上游 `light-dark()` 配色未采用，保留本地明暗调色板 `C`；只吸收编辑器全宽布局。
+- 上游「按 advanced/dashboard 隐藏页面」未采用（已删 `advanced` 选项），
+  相关拦截代码移除，但补 `refreshTabVisibility` 供 `dashboard.js` 调用。
+- 上游 jemalloc 参数并入 `honk.init`；跟随上游默认二进制后 `MALLOC_CONF=retain:false` 生效。
+- `msgfmt -c` 报 header missing 是 LuCI po 固有格式，不是回归。
+- 菜单 title 用中文「面板」：base 语言包会先把 `Dashboard` 译成「主页」。
+- 运行时更新 core 走「替换二进制」而非重装 ipk；旧二进制留 `.bak`。
+
+## 已知行为 / 限制
+
+- `createConfigFileView` 的 reload 路径不校验 RPC 返回值，`{ success: false }` 时仍会弹成功提示。
+- 运行时更新核心只换 `/usr/bin/honk-core`，不改包版本；`apk info` 里的 `honk` 版本不变。
+- `native-api` 变体无 Clash API（`experimental.clash_api`），zashboard 走 Native API 不受影响。
+- CI 流水线（`Single Plugin`）未跑过：GitHub 连不上，本地 SDK 编译替代。
