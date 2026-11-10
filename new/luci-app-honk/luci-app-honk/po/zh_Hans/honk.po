@@ -290,7 +290,7 @@ msgid "Routing configuration saved and service reloaded."
 msgstr "路由配置已保存并重载服务。"
 
 msgid "Dashboard"
-msgstr "控制面板"
+msgstr "面板"
 
 msgid "Mirror"
 msgstr "镜像源"
@@ -381,3 +381,30 @@ msgstr "前往全局设置"
 
 msgid "Global configuration saved and service restarted."
 msgstr "全局配置已保存并重启服务。"
+
+msgid "Update Core"
+msgstr "更新核心"
+
+msgid "Checking..."
+msgstr "检查中..."
+
+msgid "Updating..."
+msgstr "更新中..."
+
+msgid "The core is already up to date."
+msgstr "核心已是最新版本。"
+
+msgid "Cannot reach the release server."
+msgstr "无法连接发布服务器。"
+
+msgid "Update failed:"
+msgstr "更新失败："
+
+msgid "Update failed"
+msgstr "更新失败"
+
+msgid "Update timed out"
+msgstr "更新超时"
+
+msgid "Core updated and service restarted."
+msgstr "核心已更新并重启服务。"

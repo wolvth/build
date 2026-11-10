@@ -515,6 +515,38 @@ function get_dashboard_info(req) {
 	return res;
 }
 
+function get_core_info(req) {
+	let current = "";
+	let p = popen("/usr/bin/honk-core --version 2>/dev/null");
+	if (p) { current = trim(p.read("all") || ""); p.close(); }
+
+	let latest = "";
+	let c = popen("curl -fsSL --connect-timeout 8 'https://api.github.com/repos/daeuniverse/honk/releases?per_page=1' 2>/dev/null | jsonfilter -e '@[0].tag_name' 2>/dev/null");
+	if (c) { latest = trim(c.read("all") || ""); c.close(); }
+
+	let cur_m = match(current, /v?([0-9][^\s]*)/);
+	let latest_ver = latest ? replace(latest, /^v/, "") : "";
+	return {
+		current: current,
+		latest: latest,
+		has_update: !!(latest_ver && cur_m && index(cur_m[1], latest_ver) == -1)
+	};
+}
+
+function start_core_update(req) {
+	let tag = (req && req.args && req.args.tag) ? req.args.tag : "";
+	if (tag && !match(tag, /^[A-Za-z0-9._-]+$/))
+		return { success: false, message: "Invalid tag" };
+
+	let script = "/usr/share/honk/update_core.sh";
+	if (!stat(script))
+		return { success: false, message: "Script not found: " + script };
+
+	writefile("/tmp/honk_core_update.status", "RUNNING\n");
+	system("sh " + script + (tag ? " '" + tag + "'" : "") + " >/dev/null 2>&1 &");
+	return { success: true, queued: true };
+}
+
 function download_dashboard(req) {
 	let requested_type = (req && req.args) ? req.args.type : null;
 	if (!is_valid_dashboard_type(requested_type)) {
@@ -820,6 +852,25 @@ return {
 			call: function(req) {
 				let t = req.args ? req.args.type : "none";
 				return switch_dashboard_api(t);
+			}
+		},
+
+		// [定制扩展] 运行时更新 honk-core（无需重新编译）
+		core_info: {
+			call: get_core_info
+		},
+
+		update_core: {
+			args: { tag: "string" },
+			call: start_core_update
+		},
+
+		update_core_status: {
+			call: function(req) {
+				let status_raw = readfile("/tmp/honk_core_update.status") || "IDLE";
+				let log = readfile("/tmp/honk_core_update.log") || "";
+				let status_m = match(status_raw, /\S+/);
+				return { status: status_m ? status_m[0] : "IDLE", log: log };
 			}
 		}
 	}

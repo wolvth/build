@@ -103,6 +103,25 @@ var callHonkSwitchDashboardApi = rpc.declare({
 	expect: { }
 });
 
+var callHonkCoreInfo = rpc.declare({
+	object: 'luci.honk',
+	method: 'core_info',
+	expect: { }
+});
+
+var callHonkUpdateCore = rpc.declare({
+	object: 'luci.honk',
+	method: 'update_core',
+	params: [ 'tag' ],
+	expect: { success: true }
+});
+
+var callHonkUpdateCoreStatus = rpc.declare({
+	object: 'luci.honk',
+	method: 'update_core_status',
+	expect: { }
+});
+
 var callUciGet = rpc.declare({
 	object: 'uci',
 	method: 'get',
@@ -431,7 +450,7 @@ function ensureEditorStyles() {
 	style.id = 'honk-editor-custom-style';
 	style.textContent = [
 		'.cbi-value.hidden { display: none !important; }',
-		'.honk-status-field { display: inline-flex !important; align-items: center !important; justify-content: flex-start !important; gap: 16px !important; flex-wrap: wrap !important; min-height: 32px !important; }',
+		'.honk-status-field { display: flex !important; align-items: center !important; justify-content: flex-start !important; gap: 12px !important; flex-wrap: wrap !important; min-height: 32px !important; }',
 		'.honk-editor-toolbar { margin-bottom: 6px !important; margin-top: 0 !important; display: flex !important; align-items: center !important; justify-content: flex-start !important; }',
 		'.cm-format-btn { margin: 0 !important; cursor: pointer !important; }',
 		// The editor is the content of its row: label on top, editor across the
@@ -818,16 +837,24 @@ function ensureServiceStyles() {
 	var style = document.createElement('style');
 	style.id = 'honk-service-custom-style';
 	style.textContent = [
-		'.honk-status-field { display: inline-flex !important; align-items: center !important; justify-content: flex-start !important; gap: 16px !important; flex-wrap: wrap !important; min-height: 32px !important; }',
-		'.honk-service-row { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }',
-		'.honk-service-row .btn { margin: 0 !important; }',
+		'.honk-status-field { display: flex !important; align-items: center !important; justify-content: flex-start !important; gap: 12px !important; flex-wrap: wrap !important; min-height: 32px !important; }',
+		'.honk-service-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }',
+		'.honk-service-row .btn { margin: 0 !important; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; }',
 		'.honk-switch { position: relative; display: inline-block; width: 44px; height: 22px; border-radius: 11px; background: var(--background-color-medium, #cbd5e1); cursor: pointer; flex: none; transition: background-color .2s ease; }',
 		'.honk-switch[data-on="1"] { background: var(--success, #22c55e); }',
 		'.honk-switch-knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #ffffff; box-shadow: 0 1px 2px rgba(0, 0, 0, .35); transition: transform .2s ease; }',
 		'.honk-switch[data-on="1"] .honk-switch-knob { transform: translateX(22px); }',
 		'.honk-switch-label { margin-left: 8px; }',
 		'.honk-conn-url { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }',
-		'.honk-conn-url a { word-break: break-all; }'
+		'.honk-conn-url a { word-break: break-all; }',
+		'.honk-btn-start { background: #16a34a !important; border-color: #16a34a !important; color: #fff !important; }',
+		'.honk-btn-start:hover:not(:disabled) { background: #15803d !important; border-color: #15803d !important; }',
+		'.honk-btn-stop { background: #dc2626 !important; border-color: #dc2626 !important; color: #fff !important; }',
+		'.honk-btn-stop:hover:not(:disabled) { background: #b91c1c !important; border-color: #b91c1c !important; }',
+		'.honk-btn-update { background: #2563eb !important; border-color: #2563eb !important; color: #fff !important; }',
+		'.honk-btn-update:hover:not(:disabled) { background: #1d4ed8 !important; border-color: #1d4ed8 !important; }',
+		'.honk-btn-start:disabled, .honk-btn-stop:disabled, .honk-btn-update:disabled { background: var(--background-color-medium, #cbd5e1) !important; border-color: var(--background-color-medium, #cbd5e1) !important; color: var(--text-muted, #8a919b) !important; opacity: .75; cursor: not-allowed; }',
+		'.honk-core-version { font-family: var(--font-mono, monospace); color: var(--text-muted, #8a919b); }'
 	].join('\n');
 	document.head.appendChild(style);
 }
@@ -891,6 +918,8 @@ function renderStatusHeader() {
 	}, [ E('span', { 'class': 'honk-switch-knob' }) ]);
 	setSwitchState(autostartSwitch, false);
 
+	var startBtn = null, stopBtn = null;
+
 	function updateStatus(data) {
 		var tb = statusEl;
 		if (tb) {
@@ -916,6 +945,10 @@ function renderStatusHeader() {
 				]);
 			}
 		}
+		if (startBtn)
+			startBtn.disabled = !!(data && data.running);
+		if (stopBtn)
+			stopBtn.disabled = !(data && data.running);
 		if (data && data.autostart != null)
 			setSwitchState(autostartSwitch, !!data.autostart);
 	}
@@ -924,10 +957,13 @@ function renderStatusHeader() {
 		return callHonkStatus().then(updateStatus).catch(function() {});
 	}
 
-	function serviceButton(label, action, successMsg) {
+	function serviceButton(label, action, successMsg, variant) {
+		var cls = (variant === 'start') ? 'btn cbi-button honk-btn-start'
+			: (variant === 'stop') ? 'btn cbi-button honk-btn-stop'
+			: 'btn cbi-button cbi-button-action';
 		return E('button', {
 			'type': 'button',
-			'class': 'btn cbi-button cbi-button-action',
+			'class': cls,
 			'click': function(ev) {
 				var btn = ev.currentTarget;
 				btn.disabled = true;
@@ -977,6 +1013,54 @@ function renderStatusHeader() {
 		}
 	}, _('Reload Service'));
 
+	function pollCoreUpdate() {
+		return new Promise(function(resolve, reject) {
+			var tries = 0;
+			function tick() {
+				callHonkUpdateCoreStatus().then(function(st) {
+					if (st && st.status === 'OK')
+						return resolve(st);
+					if (st && st.status === 'FAILED')
+						return reject(new Error((st.log || '').trim() || _('Update failed')));
+					if (++tries > 150)
+						return reject(new Error(_('Update timed out')));
+					window.setTimeout(tick, 2000);
+				}).catch(reject);
+			}
+			tick();
+		});
+	}
+
+	var updateCoreBtn = E('button', {
+		'type': 'button',
+		'class': 'btn cbi-button honk-btn-update',
+		'click': function(ev) {
+			var btn = ev.currentTarget;
+			btn.disabled = true;
+			btn.innerText = _('Checking...');
+			callHonkCoreInfo().then(function(info) {
+				if (!info || !info.latest) {
+					showNotification(null, E('p', _('Cannot reach the release server.')), 'error');
+					return;
+				}
+				if (!info.has_update) {
+					showNotification(null, E('p', _('The core is already up to date.') + ' (' + (info.current || '') + ')'), 'info');
+					return;
+				}
+				btn.innerText = _('Updating...');
+				return callHonkUpdateCore(info.latest).then(pollCoreUpdate).then(function() {
+					showNotification(null, E('p', _('Core updated and service restarted.')), 'info');
+				});
+			}).catch(function(err) {
+				showNotification(null, E('p', _('Update failed:') + ' ' + (err.message || err)), 'error');
+			}).finally(function() {
+				btn.disabled = false;
+				btn.innerText = _('Update Core');
+				refreshStatus();
+			});
+		}
+	}, _('Update Core'));
+
 	var section = E('div', { 'class': 'cbi-section' }, [
 		E('div', { 'class': 'cbi-value' }, [
 			E('label', { 'class': 'cbi-value-title' }, _('Running Status')),
@@ -988,12 +1072,13 @@ function renderStatusHeader() {
 			E('label', { 'class': 'cbi-value-title' }, _('Service Control')),
 			E('div', { 'class': 'cbi-value-field honk-status-field' }, [
 				E('div', { 'class': 'honk-service-row' }, [
-					serviceButton(_('Start'), 'start', _('HONK service started.')),
+					serviceButton(_('Start'), 'start', _('HONK service started.'), 'start'),
 					serviceButton(_('Restart'), 'restart', _('HONK service restarted.')),
-					serviceButton(_('Stop'), 'stop', _('HONK service stopped.')),
+					serviceButton(_('Stop'), 'stop', _('HONK service stopped.'), 'stop'),
 					E('span', { 'class': 'honk-switch-label' }, _('Autostart')),
 					autostartSwitch,
-					reloadBtn
+					reloadBtn,
+					updateCoreBtn
 				])
 			])
 		])
