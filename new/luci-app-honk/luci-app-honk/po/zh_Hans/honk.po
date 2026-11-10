@@ -408,3 +408,6 @@ msgstr "更新超时"
 
 msgid "Core updated and service restarted."
 msgstr "核心已更新并重启服务。"
+
+msgid "Open Panel"
+msgstr "打开面板"

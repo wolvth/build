@@ -855,7 +855,7 @@ function ensureServiceStyles() {
 		'.honk-btn-update:hover:not(:disabled) { background: #1d4ed8 !important; border-color: #1d4ed8 !important; }',
 		'.honk-btn-start:disabled, .honk-btn-stop:disabled, .honk-btn-update:disabled { background: var(--background-color-medium, #cbd5e1) !important; border-color: var(--background-color-medium, #cbd5e1) !important; color: var(--text-muted, #8a919b) !important; opacity: .75; cursor: not-allowed; }',
 		'.honk-core-version { font-family: var(--font-mono, monospace); color: var(--text-muted, #8a919b); }',
-		'.honk-dashboard-field select { width: auto !important; min-width: 180px; max-width: 280px; }'
+		'.honk-dashboard-field select { width: auto !important; min-width: 90px; max-width: 140px; }'
 	].join('\n');
 	document.head.appendChild(style);
 }
@@ -870,8 +870,16 @@ var _connUrlEl = null;
 
 function renderConnectionUrl() {
 	_connUrlEl = E('span', { 'class': 'honk-conn-url', 'id': 'honk_conn_url' }, [
-		E('span', { 'class': 'honk-conn-label' }, _('Connection Address') + ': '),
-		E('em', {}, _('Collecting data...'))
+		E('button', {
+			'type': 'button',
+			'class': 'btn cbi-button cbi-button-action honk-btn-open-panel',
+			'disabled': true,
+			'click': function(ev) {
+				var url = ev.currentTarget.dataset.url;
+				if (url)
+					window.open(url, '_blank', 'noreferrer');
+			}
+		}, _('Open Panel'))
 	]);
 	return _connUrlEl;
 }
@@ -882,22 +890,31 @@ function refreshConnectionUrl() {
 	var container = _connUrlEl || document.getElementById('honk_conn_url');
 	if (!container) return Promise.resolve();
 
+	var btn = container.querySelector('button');
+	if (!btn) return Promise.resolve();
+
+	function setState(url) {
+		if (url) {
+			btn.disabled = false;
+			btn.dataset.url = url;
+			btn.title = url;
+		} else {
+			btn.disabled = true;
+			btn.dataset.url = '';
+			btn.title = _('Panel not configured');
+		}
+	}
+
 	return L.resolveDefault(callHonkGetConnection(), {}).then(function(res) {
 		var port = (res && res.port) ? String(res.port) : '';
-		var label = E('span', { 'class': 'honk-conn-label' }, _('Connection Address') + ': ');
 		if (!port) {
-			dom.content(container, [ label, E('em', {}, _('Panel not configured')) ]);
+			setState('');
 			return;
 		}
 		var proto = (port === '443') ? 'https' : 'http';
-		var url = proto + '://' + window.location.hostname + ':' + port + '/';
-		dom.content(container, [
-			label,
-			E('a', { 'href': url, 'target': '_blank', 'rel': 'noreferrer' }, url)
-		]);
+		setState(proto + '://' + window.location.hostname + ':' + port + '/');
 	}).catch(function() {
-		var label = E('span', { 'class': 'honk-conn-label' }, _('Connection Address') + ': ');
-		dom.content(container, [ label, E('em', {}, _('Panel not configured')) ]);
+		setState('');
 	});
 }
 
