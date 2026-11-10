@@ -43,7 +43,28 @@
   避免 CI 不带参数运行时把变体改掉。
 - 验证：两个 tarball 解压后均有静态 ELF `honk-core`（x86-64 / aarch64），
   版本串 `honk v0.1.0-beta.6`，与 Makefile 的 `--strip-components=1` 匹配。
+  （注：OpenWrt 的 BusyBox tar 不支持该选项，r15 的 `update_core.sh` 已改为解压后
+  `find` 定位；Makefile 的 `Build/Prepare` 走的是构建系统里的 GNU tar，不受影响。）
 - 注意：beta6 与 op 现装 core 同版本；上游 11/9 的 commit 版只走自编译，未采用。
+
+### 追加：功能增强（2026-11-10 下午，r14–r17）
+
+- **r14**：新增运行时「更新核心」——`honk.uc` 加 `core_info` / `update_core` /
+  `update_core_status` 三个 RPC；新增 `/usr/share/honk/update_core.sh`（按架构选
+  `native-api` 资产，GitHub / ghfast / ghproxy 三源回退，SHA256 校验，停服替换并保留
+  `.bak`）；状态栏加「更新核心」按钮与进度轮询。
+- **r15**：修 `update_core.sh` 的 BusyBox tar 兼容问题——`--strip-components` 不被支持，
+  改为解压到临时目录后 `find -maxdepth 3 -name honk-core` 定位。
+- **r16**：① 菜单 Dashboard 标签改「面板」（`menu.d` 的 title 直接写中文，绕开 LuCI base
+  语言包把 `Dashboard` 译成「主页」）；② 修 `startBtn` / `stopBtn` 未接收
+  `serviceButton()` 返回值、导致按钮不变灰；③「重载服务」→「重载」；④ 面板下拉框限宽。
+- **r17**：下拉框再缩到 90–140px；连接地址文本改为「打开面板」按钮（端口 443 用 https，
+  未配置时禁用）。
+- UI 配色：启动绿 `#16a34a`、停止红 `#dc2626`、更新核心蓝 `#2563eb`；
+  运行中「启动」禁用、未运行「停止」禁用。
+- 注意：**改 po 必须同时升级 `luci-i18n-honk-zh-cn` 包**（lmo 在 i18n 包里），
+  只升主包翻译不会变。
+- 对应提交：`7fcbbe3`（r13→r15）、`c0efc27`（r16）、`8bdf22b`（r17）。
 
 ---
 

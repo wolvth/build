@@ -26,6 +26,28 @@
 | 脚本默认变体 | ✅ 沿用 Makefile 的 `HONK_VARIANT`，CI 不会把它切走 |
 | 变体跟随上游 | ✅ 空 `HONK_SUFFIX` + `-native-api`，native-api 资产 hash / ELF / 结构已复验 |
 
+## 2026-11-10 下午：功能增强校验（r15–r17）
+
+| 项 | 结果 |
+| --- | --- |
+| `update_core` 端到端 | ✅ 下载 12MB → SHA256 → 解压 → 停服 → 替换（留 `.bak`）→ 重启 → status OK |
+| BusyBox tar 兼容 | ❌→✅ 首次因 `--strip-components` 失败（旧 core 未动、服务未停，属安全失败）；改用解压后 `find` 定位，复测通过 |
+| `ubus -v list luci.honk` | ✅ 含 `core_info` / `update_core` / `update_core_status` |
+| `core_info` | ✅ current = latest = `v0.1.0-beta.6`、has_update=false |
+| 菜单 Dashboard 标签 | ✅ 显示「面板」（title 直接写中文，绕开 base 语言包） |
+| 按钮禁用联动 | ✅ `startBtn` / `stopBtn` 接收返回值；运行中启动禁用、未运行停止禁用 |
+| 「重载」文案 | ✅ lmo 里按钮为「重载」 |
+| 面板下拉框 | ✅ 90–140px |
+| 打开面板按钮 | ✅ 点击新标签打开，未配置时禁用 |
+| 前端代码在包内 | ✅ `honk-btn-start/stop/update/open-panel`、`min-width: 90px` 均在安装后的 `common.js` |
+
+### 知情决策（本轮）
+
+- 菜单 title 直接用中文「面板」而不是英文 msgid + 翻译：LuCI 的 base 语言包会先把
+  `Dashboard` 译成「主页」，honk 域抢不过。
+- 运行时更新核心走「下载 release 替换二进制」而不是重装 ipk：避免每次更新都编译；
+  旧二进制保留 `.bak` 可回滚。
+
 ### 知情决策（非遗漏）
 
 - 上游 `light-dark()` 配色未采用，保留本地明暗调色板 `C`；只吸收编辑器全宽布局修复。
