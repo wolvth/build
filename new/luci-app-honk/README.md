@@ -72,6 +72,7 @@ new/luci-app-honk/
 │
 └── scripts/
     ├── update_honk_version.sh   # 更新 Makefile 的 release tag / 变体 / SHA256（定制）
+    ├── build_honk_apk.sh        # apk mkpkg 产出 honk 核心 apk（本地新增，人工调用）
     └── update_doona.sh          # 同步 Doona 面板（上游）
 ```
 
@@ -161,10 +162,18 @@ Makefile 与 CI。不带参数时自动取最新 release；只接受 release-lik
 
 ### 3. 构建 honk 核心 apk（`apk mkpkg`，推荐）
 
-`scripts/build_honk_apk.sh` 是 `honk` 核心包的**固化构建方式**（设备上
-`honk-0.1.0_beta6-r2` 就是这么来的）。它不跑 SDK 的 `make`，直接把 release 预编译
-二进制 + 本仓库的 init/config 打进 apk，因此不绑定 SDK 的内核配置，跨 25.12.x
-小版本可安装。
+| 项 | 说明 |
+| --- | --- |
+| **作用** | 产出独立的 `honk` 核心包 apk（`/usr/bin/honk-core` + `/etc/honk/` 配置 + init），复现设备上 `honk-0.1.0_beta6-r2` 的构建过程 |
+| **谁用** | **仓库维护者 / 发版者手动执行**。`.github/` 下任何 workflow **都不调用它**（`grep -rn build_honk_apk .github/` 无结果），普通 CI 构建走 SDK 的 `make` |
+| **何时用** | 需要单独产出或重装核心包时：换装测试、给设备单独装核心、复现或核对 r2 包内容、SDK 依赖链拖住编译时的替代路径 |
+| **不做什么** | 不构建 `luci-app-honk` / i18n；不替代 `honk/Makefile` 的标准编译；不自动改版本号（`--release` 由调用方显式指定）；不写回仓库；不参与 CI |
+| **依赖谁** | 读 `honk/Makefile` 里由 `update_honk_version.sh` 维护的 tag / 变体 / SHA256；与 `update_doona.sh`（管面板）无关 |
+| **谁维护** | 属本地定制，合并上游时按 `MERGE-PROMPT.md` 定制清单保留，不要用上游文件覆盖 |
+
+它不跑 SDK 的 `make`，直接把 release 预编译二进制 + 本仓库的 init/config 打进 apk，
+因此不绑定 SDK 的内核配置，跨 25.12.x 小版本可安装——这是选它而非 SDK 标准编译的原因
+（设备 25.12.6 装的是 25.12.5 SDK 时代打出的 r2，实测可装可跑）。
 
 ```bash
 # 准备文件树、校验 SHA256、打印打包命令（不需要 apk 工具）

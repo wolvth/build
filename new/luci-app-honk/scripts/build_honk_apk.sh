@@ -7,6 +7,12 @@
 # installs across 25.12.x minor releases. This is how honk-0.1.0_beta6-r2
 # (currently installed on op) was produced.
 #
+# Who uses this: repository maintainers, manually, when an independent honk
+# core .apk is needed (device swap-in tests, reproducing the r2 package, or
+# when the SDK dependency chain is in the way). NO CI workflow calls it --
+# ordinary builds go through the SDK's make / honk/Makefile. It does not build
+# luci-app-honk, does not bump versions and does not write back to the repo.
+#
 # Requirements:
 #   curl, tar, sha256sum (or shasum), find, sort, awk
 #   An apk binary WITH the "mkpkg" subcommand. The runtime apk on an OpenWrt
