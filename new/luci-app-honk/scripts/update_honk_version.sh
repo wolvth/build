@@ -146,12 +146,21 @@ resolve_tag() {
     releases_html="$(curl -fsSL --retry 3 --connect-timeout 10 "https://github.com/${UPSTREAM_REPO}/releases" 2>/dev/null || true)"
     tag="$(echo "$releases_html" | grep -oE "/${UPSTREAM_REPO}/releases/tag/[^\"]+" | head -n 1 | sed "s|/${UPSTREAM_REPO}/releases/tag/||")"
 
-    if [ -n "$tag" ]; then
+    if [ -n "$tag" ] && printf '%s\n' "$tag" | grep -qE '^v?[0-9]+(\.[0-9]+)+([._-].*)?$'; then
         printf '%s\n' "$tag"
         return 0
     fi
 
-    git_ls_remote | awk '{print $2}' | sed 's|refs/tags/||' | grep -v '\^{}' | sort -V | tail -n 1
+    # Fallback: only consider release-like tags. Upstream also publishes
+    # debug.* / nightly tags, and a bare "sort -V | tail -1" would pick one.
+    local fallback
+    fallback="$(git_ls_remote | awk '{print $2}' | sed 's|refs/tags/||' \
+        | grep -v '\^{}' \
+        | grep -E '^v?[0-9]+(\.[0-9]+)+([._-].*)?$' \
+        | grep -viE '(debug|nightly|dev|test)' \
+        | sort -V | tail -n 1 || true)"
+    [ -n "$fallback" ] || { echo "error: no release-like tag found for ${UPSTREAM_REPO}" >&2; return 1; }
+    printf '%s\n' "$fallback"
 }
 
 resolve_version_from_release() {
@@ -286,6 +295,10 @@ main() {
 
     local assets_list asset_x86_64 asset_aarch64 asset_tag variant rest
     assets_list="$(fetch_release_assets_info "$tag" || true)"
+    if [ -z "$assets_list" ]; then
+        echo "error: no release assets for ${UPSTREAM_REPO} ${tag}; upstream may have stopped shipping prebuilt honk-core binaries" >&2
+        exit 1
+    fi
 
     asset_x86_64="$(match_asset_name "x86_64-unknown-linux-musl" "$suffix" "$PREFERRED_VARIANT" "$assets_list" "$tag")"
     asset_aarch64="$(match_asset_name "aarch64-unknown-linux-musl" "$suffix" "$PREFERRED_VARIANT" "$assets_list" "$tag")"
