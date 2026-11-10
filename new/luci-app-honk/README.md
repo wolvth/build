@@ -16,6 +16,65 @@ OpenWrt 上 honk（eBPF 透明代理，兼容 dae）的 LuCI 界面与安装包�
 | `luci-app-honk` | LuCI 页面、rpcd/ucode 服务、Doona 静态面板 |
 | `luci-i18n-honk-zh-cn` | 简体中文翻译 |
 
+## 目录结构
+
+```text
+new/luci-app-honk/
+├── README.md                    # 本文件：项目说明、目录结构、更新方式
+├── MERGE-PROMPT.md              # 上游合并执行手册（下次合并看这个）
+├── MERGE-NOTES.md               # 本次合并记录、校验结果、已知限制
+├── PIC/PIC.jpg                  # README 配图（上游）
+│
+├── honk/                        # 核心包
+│   ├── Makefile                 # 包定义（定制：下载 release + postinst 禁用）
+│   ├── build_honk_core.sh       # 上游自编译脚本（本仓库不调用）
+│   ├── honk_toolchain.sh        # 上游工具链解析（本仓库不调用）
+│   └── files/
+│       ├── config.dae           # /etc/honk/config.dae 模板（上游）
+│       ├── config.d/
+│       │   ├── node.dae         # 节点与订阅模板（上游）
+│       │   ├── route.dae        # 分流规则模板（上游）
+│       │   ├── dns.dae          # DNS 模板（上游）
+│       │   └── api.dae          # Native API 模板（空，上游）
+│       ├── honk.config          # /etc/config/honk 默认值（定制：enabled）
+│       └── honk.init            # /etc/init.d/honk（定制：dae 互斥、日志、hot_reload）
+│
+├── luci-app-honk/               # LuCI 包
+│   ├── Makefile                 # 包定义（定制：不依赖 +honk、+unzip、PKG_RELEASE）
+│   ├── po/zh_Hans/honk.po       # 中文翻译（定制）
+│   └── root/                    # 安装到设备的文件树
+│       ├── etc/
+│       │   ├── uci-defaults/luci-honk        # 首次安装清理残留 uci（定制）
+│       │   └── honk/doona/                   # Doona 面板资源，139 文件（上游）
+│       ├── usr/share/
+│       │   ├── honk/
+│       │   │   ├── update_core.sh            # 运行时更新 core（定制，新增）
+│       │   │   └── download_dashboard.sh     # 下载 doona / doona-lite（上游）
+│       │   ├── luci/menu.d/luci-app-honk.json    # 菜单与标签（定制：Dashboard→面板）
+│       │   └── rpcd/
+│       │       ├── acl.d/luci-app-honk.json      # 权限（上游）
+│       │       └── ucode/honk.uc                 # RPC 后端（定制：探针/服务控制/更新核心）
+│       └── www/luci-static/resources/
+│           ├── honk/
+│           │   ├── common.js          # 公共库：状态栏、按钮、连接地址、更新核心（定制）
+│           │   ├── dashprofiles.js    # 面板类型定义（上游）
+│           │   ├── lib/               # CodeMirror（上游）
+│           │   ├── addon/             # CodeMirror 插件（上游）
+│           │   └── mode/dae/dae.js    # dae 语法高亮（上游）
+│           └── view/honk/
+│               ├── global.js          # 全局设置页（定制：保存流程、下拉框）
+│               ├── dashboard.js       # 面板页（上游）
+│               ├── dns.js             # DNS 编辑页（上游）
+│               ├── node.js            # 节点编辑页（上游）
+│               ├── route.js           # 路由编辑页（上游）
+│               ├── api.js             # API 编辑页（上游）
+│               └── log.js             # 日志页（上游）
+│
+└── scripts/
+    ├── update_honk_version.sh   # 更新 Makefile 的 release tag / 变体 / SHA256（定制）
+    └── update_doona.sh          # 同步 Doona 面板（上游）
+```
+
 ## 功能特性（相对上游的定制）
 
 ### LuCI 界面
@@ -106,5 +165,7 @@ Makefile 与 CI。
 
 ## 合并上游
 
-见 `MERGE-PROMPT.md`（流程与裁决原则）、`MERGE-NOTES.md`（历次记录）、`REVIEW.md`（校验记录）。
+- **`MERGE-PROMPT.md`**：合并执行手册（merge base、定制文件清单、裁决原则、验证清单）
+- **`MERGE-NOTES.md`**：本次合并记录、校验结果、已知限制
+
 **下次合并的 merge base**：`9936045ac52ca46a48f57f86fae1af8fa0e9134b`（2026-11-09）。

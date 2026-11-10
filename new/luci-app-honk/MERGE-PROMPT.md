@@ -140,7 +140,7 @@ git merge-file -p --diff3 "local/$f" "base/$f" "upstream/$f" > "merged/$f"
 
 ```
 请帮我把上游 QiuSimons/luci-app-honk 的更新合并到定制版 wolvth/build。
-先读 new/luci-app-honk/MERGE-PROMPT.md（同目录 MERGE-NOTES.md / REVIEW.md 是历史记录）。
+先读 new/luci-app-honk/MERGE-PROMPT.md（同目录 MERGE-NOTES.md 是本次合并记录与校验）。
 要求：按第三节裁决原则保留定制、吸收上游修复；按第四节做三方合并，merge base 用第一节
 记录的 commit；合并后按第五节清单验证；给我变更清单：每个文件改了什么、为什么、
 哪些是上游改动哪些是裁决；完成后提醒我更新第一节的 merge base commit。
