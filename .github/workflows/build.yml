@@ -46,6 +46,12 @@ on:
         required: false
         default: '/root/openwrt'
 
+      refresh_honk_assets:
+        description: '刷新 honk 核心版本与 Doona 面板（会改写 Makefile / 面板文件，默认关闭）'
+        required: false
+        type: boolean
+        default: false
+
 env:
   REPO_URL: https://git.openwrt.org/openwrt/openwrt.git
   # 从 input 读取，如果手动触发未指定则使用 default
@@ -318,9 +324,17 @@ jobs:
         
         echo "  😋 检查package目录下的自定义插件仓库"
         ls -lh openwrt/package/custom_repos
+        
+    # ===== 可选：刷新 honk 核心版本与 Doona 面板（默认关闭，仅影响本次构建） =====
+    - name: Refresh honk core version & Doona panel (optional)
+      if: ${{ inputs.refresh_honk_assets }}
+      run: |
+        set -e
+        echo ">>> refresh_honk_assets enabled"
         bash openwrt/package/custom_repos/luci-app-honk/scripts/update_doona.sh
         bash openwrt/package/custom_repos/luci-app-honk/scripts/update_honk_version.sh
-        
+        echo ">>> 已刷新；改动仅存在于本次构建的工作区，不回写仓库"
+
     # ==================== 步骤 🔴 Makefile 修复路径与生成插件配置 ====================
     - name: Patch Makefiles & Generate Package Config
       run: |

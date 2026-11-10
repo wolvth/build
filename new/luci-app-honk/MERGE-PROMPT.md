@@ -29,6 +29,7 @@
 | `honk/files/honk.config` | `option enabled '1'` |
 | `honk/files/honk.init` | dae/honk 互斥、`/var/log/honk`、`hot_reload`、清版本缓存、`DAE_LOCATION_ASSET` / `MALLOC_CONF` |
 | `scripts/update_honk_version.sh` | **保留本地版**（见第三节第 2 条） |
+| `scripts/build_honk_apk.sh` | **本地新增**：`apk mkpkg` 固化构建，上游无此文件 |
 
 ### `luci-app-honk/` 包
 
@@ -121,7 +122,7 @@ git merge-file -p --diff3 "local/$f" "base/$f" "upstream/$f" > "merged/$f"
 - [ ] 全目录无 `<<<<<<<` / `=======` / `>>>>>>>` 残留
       （doona 的 `THIRD-PARTY-NOTICES.txt` 有 `====` 分隔线，是误报）
 - [ ] `node --check` 所有 `.js`；`sh -n` 所有 `.sh` / `honk.init` / `luci-honk`
-- [ ] `update_core.sh` 里**没有** `--strip-components`（BusyBox tar 不支持）
+- [ ] `update_core.sh` **没有实际调用** `--strip-components`（第 89 行注释含该字样，纯 grep 会误报；BusyBox tar 不支持）
 - [ ] po：LuCI 的 po 没有 gettext header，`msgfmt -c` 必然报「header missing」；
       校验内容时补临时 header 再跑，并确认 msgid/msgstr 数量相等、无重复
 - [ ] `honk/Makefile` 仍是下载 release 结构，`Build/Compile` 里没有 `build_honk_core.sh`

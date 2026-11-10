@@ -103,7 +103,7 @@ new/luci-app-honk/
 
 - `honk/Makefile` 用 `HONK_RELEASE_TAG` / `HONK_ASSET_TAG` / `HONK_VARIANT` / `HONK_HASH_*` 钉住版本
 - 当前 `v0.1.0-beta.6`，变体 **`-native-api`**（空 `HONK_SUFFIX`，跟随上游 10/29 之后的选择）
-- 上游那两个构建脚本随仓库保留，但 **Makefile 不调用**
+- 上游那两个构建脚本随仓库保留，但 **Makefile / CI 都没有调用**，是纯参考文件
 - `luci-app-honk` 不强制依赖 `+honk`（核心单独安装），依赖 `+unzip`（doona-lite 部署）
 
 ## 配置文件
@@ -148,7 +148,7 @@ ubus call luci.honk update_core_status    # IDLE / RUNNING / OK / FAILED + 日�
 （旧文件留 `.bak`）→ 重启。
 脚本 `/usr/share/honk/update_core.sh`，状态 `/tmp/honk_core_update.status`。
 
-### 2. 改 Makefile 版本（构建新 ipk）
+### 2. 改 Makefile 版本（钉新 release）
 
 ```bash
 bash scripts/update_honk_version.sh --tag <tag> --variant native-api
@@ -156,12 +156,44 @@ bash scripts/update_honk_version.sh --tag <tag> --variant native-api
 
 会更新 tag、资产变体与两个架构的 SHA256（取自 release 的 `SHA256SUMS`），并沿用 Makefile
 里已钉的变体。**不要用上游新版覆盖**——上游版依赖 `HONK_SRC_VERSION`，会改坏本仓库
-Makefile 与 CI。
+Makefile 与 CI。不带参数时自动取最新 release；只接受 release-like tag，资产列表为空会
+明确报错退出。
 
-### 3. 更新 Doona 面板
+### 3. 构建 honk 核心 apk（`apk mkpkg`，推荐）
+
+`scripts/build_honk_apk.sh` 是 `honk` 核心包的**固化构建方式**（设备上
+`honk-0.1.0_beta6-r2` 就是这么来的）。它不跑 SDK 的 `make`，直接把 release 预编译
+二进制 + 本仓库的 init/config 打进 apk，因此不绑定 SDK 的内核配置，跨 25.12.x
+小版本可安装。
+
+```bash
+# 准备文件树、校验 SHA256、打印打包命令（不需要 apk 工具）
+bash scripts/build_honk_apk.sh --dry-run
+
+# 真正打包：需要带 mkpkg 子命令的 apk（OpenWrt SDK 的 host 工具）
+APK_BIN=/path/to/sdk/staging_dir/host/bin/apk \
+  bash scripts/build_honk_apk.sh --arch aarch64 --release 2 --output-dir ./ipk
+```
+
+- 参数：`--arch aarch64|x86_64`、`--release N`、`--output-dir`、`--apk-bin`、`--dry-run`
+- 从 `honk/Makefile` 读取 tag / 变体 / 双架构 SHA256，下载后校验；解压不用
+  `--strip-components`（兼容 BusyBox tar）
+- 生成 conffiles、conffiles_static、post-install（默认禁用服务）与 depends，
+  与设备已装 `r2` 包逐项一致
+- **注意**：设备上的运行时 `apk` 没有 `mkpkg` 子命令，必须用 SDK 的
+  `staging_dir/host/bin/apk`；本仓库 CI 未跑过这一步
+
+### 4. 更新 Doona 面板
 
 `scripts/update_doona.sh`（取上游）。上游靠 `update-honk.yml` 定时调用并自动提交；
 本仓库 CI 没有自动回写，面板落后时需手动同步。
+
+### 5. CI 刷新开关
+
+`.github/workflows/build.yml` 的 `refresh_honk_assets`（boolean，默认 **false**）控制
+是否执行 `update_doona.sh` + `update_honk_version.sh`。两者已合并为**一个独立可选步骤**，
+默认构建不会改写 Makefile 或面板文件；需要刷新时手动触发并勾上该选项，改动只存在于
+当次构建工作区，不回写仓库。
 
 ## 合并上游
 
