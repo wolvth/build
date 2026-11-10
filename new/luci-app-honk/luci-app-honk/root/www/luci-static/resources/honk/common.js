@@ -854,7 +854,8 @@ function ensureServiceStyles() {
 		'.honk-btn-update { background: #2563eb !important; border-color: #2563eb !important; color: #fff !important; }',
 		'.honk-btn-update:hover:not(:disabled) { background: #1d4ed8 !important; border-color: #1d4ed8 !important; }',
 		'.honk-btn-start:disabled, .honk-btn-stop:disabled, .honk-btn-update:disabled { background: var(--background-color-medium, #cbd5e1) !important; border-color: var(--background-color-medium, #cbd5e1) !important; color: var(--text-muted, #8a919b) !important; opacity: .75; cursor: not-allowed; }',
-		'.honk-core-version { font-family: var(--font-mono, monospace); color: var(--text-muted, #8a919b); }'
+		'.honk-core-version { font-family: var(--font-mono, monospace); color: var(--text-muted, #8a919b); }',
+		'.honk-dashboard-field select { width: auto !important; min-width: 180px; max-width: 280px; }'
 	].join('\n');
 	document.head.appendChild(style);
 }
@@ -1061,6 +1062,9 @@ function renderStatusHeader() {
 		}
 	}, _('Update Core'));
 
+	startBtn = serviceButton(_('Start'), 'start', _('HONK service started.'), 'start');
+	stopBtn = serviceButton(_('Stop'), 'stop', _('HONK service stopped.'), 'stop');
+
 	var section = E('div', { 'class': 'cbi-section' }, [
 		E('div', { 'class': 'cbi-value' }, [
 			E('label', { 'class': 'cbi-value-title' }, _('Running Status')),
@@ -1072,9 +1076,9 @@ function renderStatusHeader() {
 			E('label', { 'class': 'cbi-value-title' }, _('Service Control')),
 			E('div', { 'class': 'cbi-value-field honk-status-field' }, [
 				E('div', { 'class': 'honk-service-row' }, [
-					serviceButton(_('Start'), 'start', _('HONK service started.'), 'start'),
+					startBtn,
 					serviceButton(_('Restart'), 'restart', _('HONK service restarted.')),
-					serviceButton(_('Stop'), 'stop', _('HONK service stopped.'), 'stop'),
+					stopBtn,
 					E('span', { 'class': 'honk-switch-label' }, _('Autostart')),
 					autostartSwitch,
 					reloadBtn,

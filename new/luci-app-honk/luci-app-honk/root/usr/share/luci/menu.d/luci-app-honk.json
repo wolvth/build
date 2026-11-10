@@ -51,7 +51,7 @@
 		}
 	},
 	"admin/services/honk/dashboard": {
-		"title": "Dashboard",
+		"title": "面板",
 		"order": 6,
 		"action": {
 			"type": "view",

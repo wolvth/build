@@ -47,7 +47,7 @@ msgid "Failed to execute service action:"
 msgstr "执行服务操作失败："
 
 msgid "Reload Service"
-msgstr "重载服务"
+msgstr "重载"
 
 msgid "Global Settings"
 msgstr "全局设置"
