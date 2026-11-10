@@ -11,7 +11,7 @@
   `update_honk_version.sh`），直接取上游或保留本地。
 - doona 面板无定制，整体替换为上游最新（139 文件）。
 - 备份：`/root/honk-merge/pre-merge-20261110.bundle`（34M）+
-  分支 `backup/honk-pre-merge-20261110`。
+  分支 `backup/honk-pre-merge-20261110`（均已于 11-10 清理）。
 
 ## 二、关键裁决
 
@@ -117,7 +117,7 @@
 - op 运行位置曾于 18:42 临时替换为修复版并真机验证（rpcd 重启、14 RPC、
   core_info、两重并发守卫、init 守卫、静态资源 md5 一致）；绕过包管理，
   下次装包 / `apk fix` 会覆盖，需重新打包固化。备份在
-  `op:/root/honk-review-20261110/backup-20261110-1840/`。
+  `op:/root/honk-review-20261110/backup-20261110-1840/`（已于 20:47 清理）。
 
 ## 十、提交、编译、安装与基线复核（19:02–19:45）
 
@@ -134,7 +134,7 @@
 - 装后验证：4 个运行文件 md5 = 修复版、core 二进制未变、14 RPC、
   `core_info`、非法 tag 拒绝、lmo 新中文文案命中、162/163 md5 基线重新成立。
 - 备份：op `/root/honk-backup-20261110-1900/`（装包前）、
-  `/root/honk-review-20261110/backup-20261110-1840/`（替换前）。
+  `/root/honk-review-20261110/backup-20261110-1840/`（替换前），均已于 20:47 清理。
 
 ## 十一、dae 守卫改用 ubus instances（20:01–20:06）
 
