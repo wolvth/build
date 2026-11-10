@@ -93,6 +93,8 @@
     失败回滚 / 并发锁；`honk.uc` 的 `compare_version` 与 `start_core_update` 守卫；
     `common.js` 的 `requireSuccess`；`honk.init` 的 `dae_is_running` 守卫。
     上游若改这些文件，按「我的定制功能 > 上游行为改动」裁决。
+    **`dae_is_running` 守卫不可删**：20:33 实测，无守卫时 dae running 下执行
+    `honk stop` 会删掉 `daens` / `dae0` / `dae0peer`，而 dae 进程仍显示 running。
 
 ## 四、合并方法
 

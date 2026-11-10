@@ -145,3 +145,6 @@
   installed db r4、`/etc/init.d/honk` md5 `14b34149…`、服务 running、
   用户配置由 conffiles 保护、6 个 `.apk-new` 已清理。
 - `94b5798` 的 `procd_running` 实现已被本提交取代。
+- **20:33–20:35 实测**：换入无守卫原版 init 后，dae running 时执行 `honk stop`，
+  `daens` / `dae0` / `dae0peer` 被删除，而 `dae` 进程仍显示 running（数据面已断）；
+  恢复 r4 后 honk 的 `daens` / `dae0peer` 重建、服务正常。**守卫必须保留。**
