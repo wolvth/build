@@ -40,6 +40,7 @@ Usage: build_honk_apk.sh [options]
   --output-dir DIR        where to write the .apk (default: cwd)
   --apk-bin PATH          apk with mkpkg (default: APK_BIN, OPENWRT_SDK, PATH)
   --dry-run               build the file tree and print the command only
+                          (still downloads the core tarball to verify SHA256)
   -h, --help              show this help
 USAGE
 }
@@ -95,6 +96,11 @@ ASSET="honk-core-${ASSET_TAG}-${TARGET}${SUFFIX}${VARIANT}.tar.gz"
 URL="https://github.com/daeuniverse/honk/releases/download/${RELEASE_TAG}/${ASSET}"
 VERSION="${PKG_VERSION}-r${RELEASE}"
 OUT="${OUTDIR}/honk-${VERSION}.apk"
+# Runtime package names for apk mkpkg. This is deliberately NOT parsed from
+# honk/Makefile: that DEPENDS uses build-system syntax (+, @KERNEL_XDP_SOCKETS,
+# HONK_USE_VMLINUX_BTF:...) which apk cannot consume. They are two expressions
+# of the same dependency set -- when Makefile DEPENDS changes, review this
+# list as well, otherwise the SDK and mkpkg packages will drift apart.
 DEPENDS="kmod-nf-conntrack kmod-nfnetlink-queue kmod-nft-core kmod-nft-queue kmod-sched-bpf kmod-sched-core kmod-veth libc libstdcpp6 v2ray-geoip v2ray-geosite vmlinux-btf"
 DESC="honk-core (release build) with the custom init/config of this repo"
 

@@ -84,7 +84,7 @@
 - `msgfmt -c` 报 header missing 是 LuCI po 固有格式，不是回归。
 - 菜单 title 用中文「面板」：base 语言包会先把 `Dashboard` 译成「主页」。
 - 运行时更新 core 走「替换二进制」而非重装 ipk；旧二进制留 `.bak`。
-- `createConfigFileView` 的 reload 路径不校验 RPC 返回值，`{ success: false }` 时仍弹成功提示。
+- ~~`createConfigFileView` 的 reload 路径不校验 RPC 返回值~~ **已修**（见第九节）。
 - 运行时更新核心只换 `/usr/bin/honk-core`，不改包版本；`apk info` 里 `honk` 版本不变。
 - `native-api` 变体无 Clash API（`experimental.clash_api`），zashboard 走 Native API 不受影响。
 - CI 流水线（`Single Plugin`）未跑过：GitHub 连不上，本地 SDK 编译替代。
@@ -98,3 +98,23 @@
 | 「`-stock` 是定制偏好」 | 上游 Makefile 自带，上游 10/29 已改为空 suffix |
 | 「`dashprofiles.js` / `log.js` 有定制」 | 无定制，差异全是上游新增/移除 |
 | merge base `7c8e5411` | 已前移到 `7d280032`，再前移到 `9936045` |
+
+## 九、代码级 review 修复（2026-11-10 18:18 起，待提交）
+
+- 只改实测「有定制」的文件；与上游 `9936045` 逐字节相同的 `acl.d` /
+  `download_dashboard.sh` / `dashboard.js`（及仅差末尾换行的 `log.js` / `dashprofiles.js`）
+  **未动**。
+- 修复：`update_core.sh`（强制官方 SHA256SUMS、校验前不执行下载二进制、启动失败回滚、
+  并发锁、tag 加固）、`honk.uc`（`compare_version` 语义化比较、更新任务状态守卫）、
+  `common.js`（`requireSuccess` 统一校验 `{ success: false }`、轮询超时与脚本对齐）、
+  `honk.init`（dae 运行时跳过 `cleanup_netns`）、po（补 5 条错误文案）、
+  `build_honk_apk.sh`（DEPENDS 双清单与 `--dry-run` 说明）。
+- 未修（上游文件约束）：`download_dashboard.sh` 的 `-k` 禁 TLS 校验、`acl.d` 全 `"*"`、
+  面板自定义 URL 无主机白名单、下载任务无服务端锁。
+- 验证：本机 `sh -n` / `bash -n` / `node --check`、沙箱 10 场景；op 隔离目录
+  BusyBox `sh -n`、`ucode -c`、`compare_version` 9 断言、沙箱 10 场景重跑、
+  前端 `requireSuccess` 5 断言，全部通过。po 只验格式，界面文案未验证。
+- op 运行位置已于 18:42 替换为修复版并真机验证（rpcd 重启、14 RPC、
+  core_info、两重并发守卫、init 守卫、静态资源 md5 一致）；绕过包管理，
+  下次装包 / `apk fix` 会覆盖，需重新打包固化。备份在
+  `op:/root/honk-review-20261110/backup-20261110-1840/`。

@@ -411,3 +411,18 @@ msgstr "核心已更新并重启服务。"
 
 msgid "Open Panel"
 msgstr "打开面板"
+
+msgid "Download did not finish in time."
+msgstr "下载未在规定时间内完成。"
+
+msgid "Download task stopped reporting progress."
+msgstr "下载任务停止上报进度。"
+
+msgid "Failed to apply configuration:"
+msgstr "应用配置失败："
+
+msgid "HONK did not come back up; check the logs"
+msgstr "HONK 未能重新启动，请查看日志"
+
+msgid "Service did not accept the request"
+msgstr "服务未接受该请求"

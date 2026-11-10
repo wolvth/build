@@ -27,7 +27,7 @@
 | --- | --- |
 | `honk/Makefile` | 沿用上游旧版「下载 release」结构 + `postinst` 默认禁用；空 `HONK_SUFFIX` + `HONK_VARIANT:=-native-api` |
 | `honk/files/honk.config` | `option enabled '1'` |
-| `honk/files/honk.init` | dae/honk 互斥、`/var/log/honk`、`hot_reload`、清版本缓存、`DAE_LOCATION_ASSET` / `MALLOC_CONF` |
+| `honk/files/honk.init` | dae/honk 互斥、`/var/log/honk`、`hot_reload`、清版本缓存、`DAE_LOCATION_ASSET` / `MALLOC_CONF`；`dae_is_running()` 守卫（dae 运行时跳过 netns 清理） |
 | `scripts/update_honk_version.sh` | **保留本地版**（见第三节第 2 条） |
 | `scripts/build_honk_apk.sh` | **本地新增**：`apk mkpkg` 固化构建，上游无此文件 |
 
@@ -36,11 +36,11 @@
 | 文件 | 定制内容 |
 | --- | --- |
 | `luci-app-honk/Makefile` | 不依赖 `+honk`、加 `+unzip`、`PKG_RELEASE` |
-| `luci-app-honk/po/zh_Hans/honk.po` | 定制翻译（Dashboard→面板、Reload Service→重载、更新核心/打开面板等） |
+| `luci-app-honk/po/zh_Hans/honk.po` | 定制翻译（Dashboard→面板、Reload Service→重载、更新核心/打开面板等）+ 错误路径文案 |
 | `luci-app-honk/root/usr/share/luci/menu.d/luci-app-honk.json` | Dashboard 标签 `title` 直接写「面板」 |
-| `luci-app-honk/root/usr/share/honk/update_core.sh` | **新增文件**：运行时下载/替换 core |
-| `luci-app-honk/root/usr/share/rpcd/ucode/honk.uc` | 进程探针、自启动、服务控制、连接地址；新增 `core_info` / `update_core` / `update_core_status` |
-| `.../resources/honk/common.js` | 自定义状态栏、明暗调色板、打开面板按钮、按钮配色/禁用联动、更新核心按钮、标签全显示 |
+| `luci-app-honk/root/usr/share/honk/update_core.sh` | **新增文件**：运行时下载/替换 core；强制 SHA256（校验文件只取官方源）、失败即中止、启动失败回滚、并发锁 |
+| `luci-app-honk/root/usr/share/rpcd/ucode/honk.uc` | 进程探针、自启动、服务控制、连接地址；`core_info` / `update_core` / `update_core_status`；`compare_version` 语义化比较与更新任务并发守卫 |
+| `.../resources/honk/common.js` | 自定义状态栏、明暗调色板、打开面板按钮、按钮配色/禁用联动、更新核心按钮、标签全显示；`requireSuccess` 统一校验 RPC 返回值 |
 | `.../resources/view/honk/global.js` | 无 enabled/advanced、变更检测保存流程、面板下拉框 |
 | `luci-app-honk/root/etc/uci-defaults/luci-honk` | 清理 auto-subscribe 残留选项 |
 
@@ -89,6 +89,10 @@
    无变更 → 不动服务；只在有暂存 uci 变更时才 `ui.changes.apply`。
 9. **doona 面板没有定制**，直接整体替换为上游最新版，不要三方合并。
 10. **`luci-app-honk/Makefile` 保留「不依赖 `+honk`」**，但跟随上游加 `+unzip`。
+11. **2026-11-10 review 的安全修复必须保留**：`update_core.sh` 的强制 SHA256 /
+    失败回滚 / 并发锁；`honk.uc` 的 `compare_version` 与 `start_core_update` 守卫；
+    `common.js` 的 `requireSuccess`；`honk.init` 的 `dae_is_running` 守卫。
+    上游若改这些文件，按「我的定制功能 > 上游行为改动」裁决。
 
 ## 四、合并方法
 
@@ -136,6 +140,9 @@ git merge-file -p --diff3 "local/$f" "base/$f" "upstream/$f" > "merged/$f"
 - [ ] doona 目录文件清单 == 上游 master
 - [ ] **改了 po 必须同时升级 `luci-i18n-honk-zh-cn` 包**（lmo 在 i18n 包里）
 - [ ] 行尾 LF
+- [ ] `update_core.sh`：SHA256SUMS 取不到 / 资产未列出 / hash 不符时 FAILED 且不执行、不替换 core
+- [ ] `honk.uc` 用 `ucode -c` 通过；`compare_version` 对 `beta.10 > beta.6`、正式版 > 预发布结果正确
+- [ ] `common.js` 所有写操作按钮都经过 `requireSuccess`，`update_core` 派发失败不会误报成功
 
 ## 六、任务提示词
 

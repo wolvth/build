@@ -515,6 +515,52 @@ function get_dashboard_info(req) {
 	return res;
 }
 
+/* Compare two version strings semantically. The old implementation used a
+ * substring test (index(current, latest) == -1): a device newer than the
+ * release was reported as "update available" (downgrade), and a shorter tag
+ * that happened to be a prefix of the current one looked "already current". */
+function parse_version(s) {
+	let m = match(s || "", /v?([0-9]+)\.([0-9]+)\.([0-9]+)([-.]([0-9A-Za-z.]+))?/);
+	if (!m)
+		return null;
+	return { major: +m[1], minor: +m[2], patch: +m[3], pre: m[5] || "" };
+}
+
+function compare_version(x, y) {
+	let a = parse_version(x);
+	let b = parse_version(y);
+	if (!a || !b)
+		return null;
+
+	if (a.major != b.major)
+		return a.major > b.major ? 1 : -1;
+	if (a.minor != b.minor)
+		return a.minor > b.minor ? 1 : -1;
+	if (a.patch != b.patch)
+		return a.patch > b.patch ? 1 : -1;
+	if (a.pre == b.pre)
+		return 0;
+	if (a.pre == "")
+		return 1;
+	if (b.pre == "")
+		return -1;
+
+	let ap = split(a.pre, /[._-]/);
+	let bp = split(b.pre, /[._-]/);
+	let n = length(ap);
+	if (length(bp) > n)
+		n = length(bp);
+	for (let i = 0; i < n; i++) {
+		let av = ap[i] || "", bv = bp[i] || "";
+		if (av == bv)
+			continue;
+		if (match(av, /^[0-9]+$/) && match(bv, /^[0-9]+$/))
+			return +av > +bv ? 1 : -1;
+		return av > bv ? 1 : -1;
+	}
+	return 0;
+}
+
 function get_core_info(req) {
 	let current = "";
 	let p = popen("/usr/bin/honk-core --version 2>/dev/null");
@@ -524,26 +570,38 @@ function get_core_info(req) {
 	let c = popen("curl -fsSL --connect-timeout 8 'https://api.github.com/repos/daeuniverse/honk/releases?per_page=1' 2>/dev/null | jsonfilter -e '@[0].tag_name' 2>/dev/null");
 	if (c) { latest = trim(c.read("all") || ""); c.close(); }
 
-	let cur_m = match(current, /v?([0-9][^\s]*)/);
-	let latest_ver = latest ? replace(latest, /^v/, "") : "";
+	let cmp = compare_version(current, latest);
 	return {
 		current: current,
 		latest: latest,
-		has_update: !!(latest_ver && cur_m && index(cur_m[1], latest_ver) == -1)
+		has_update: !!(latest && cmp != null && cmp < 0)
 	};
 }
 
 function start_core_update(req) {
 	let tag = (req && req.args && req.args.tag) ? req.args.tag : "";
-	if (tag && !match(tag, /^[A-Za-z0-9._-]+$/))
+	if (tag && (!match(tag, /^[A-Za-z0-9._-]+$/) ||
+	           substr(tag, 0, 1) == "-" || index(tag, "..") != -1))
 		return { success: false, message: "Invalid tag" };
+
+	/* The status file is global and persistent: refuse a second task while one
+	 * is in flight, otherwise both scripts replace the same binary and the
+	 * frontend can read a stale OK from a previous run. */
+	let status = trim(readfile("/tmp/honk_core_update.status") || "");
+	if (match(status, /^RUNNING/) || stat("/tmp/honk_core_update.lock"))
+		return { success: false, message: "A core update is already running" };
 
 	let script = "/usr/share/honk/update_core.sh";
 	if (!stat(script))
 		return { success: false, message: "Script not found: " + script };
 
+	let cmd = "sh " + script + (tag ? " '" + tag + "'" : "") + " >/dev/null 2>&1 &";
 	writefile("/tmp/honk_core_update.status", "RUNNING\n");
-	system("sh " + script + (tag ? " '" + tag + "'" : "") + " >/dev/null 2>&1 &");
+	let rc = system(cmd);
+	if (rc != 0) {
+		writefile("/tmp/honk_core_update.status", "FAILED\n");
+		return { success: false, message: "failed to dispatch the update task" };
+	}
 	return { success: true, queued: true };
 }
 

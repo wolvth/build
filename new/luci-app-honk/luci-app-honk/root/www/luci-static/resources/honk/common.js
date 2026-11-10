@@ -33,6 +33,14 @@ function showNotification(title, children, type, timeout) {
 	return node;
 }
 
+/* rpcd methods answer { success: false, message: ... } on failure. A resolved
+ * RPC promise alone is therefore not proof that the action was accepted. */
+function requireSuccess(resp, fallback) {
+	if (!resp || resp.success === false)
+		throw new Error((resp && resp.message) || fallback || _('Service did not accept the request'));
+	return resp;
+}
+
 var callHonkStatus = rpc.declare({
 	object: 'luci.honk',
 	method: 'status',
@@ -784,7 +792,8 @@ function createConfigFileView(filePath, mapTitle, mapDesc, fieldTitle, successMs
 		handleSaveApply: function(ev, mode) {
 			return this.handleSave(ev).then(function() {
 				return needRestart ? callHonkRestart() : callHonkReload();
-			}).then(function() {
+			}).then(function(resp) {
+				requireSuccess(resp);
 				showNotification(null, E('p', successMsg || _('Configuration applied and service reloaded.')), 'info');
 			}).catch(function(err) {
 				showNotification(null, E('p', _('Failed to apply configuration:') + ' ' + (err.message || err)), 'error');
@@ -986,7 +995,8 @@ function renderStatusHeader() {
 				var btn = ev.currentTarget;
 				btn.disabled = true;
 				btn.innerText = _('Executing...');
-				callHonkServiceAction(action).then(function() {
+				callHonkServiceAction(action).then(function(resp) {
+					requireSuccess(resp, _('Failed to execute service action:'));
 					showNotification(null, E('p', successMsg), 'info');
 				}).catch(function(err) {
 					showNotification(null, E('p', _('Failed to execute service action:') + ' ' + (err.message || err)), 'error');
@@ -1002,7 +1012,8 @@ function renderStatusHeader() {
 	autostartSwitch.addEventListener('click', function() {
 		var turningOn = (autostartSwitch.dataset.on !== '1');
 		setSwitchState(autostartSwitch, turningOn);
-		callHonkServiceAction(turningOn ? 'enable' : 'disable').then(function() {
+		callHonkServiceAction(turningOn ? 'enable' : 'disable').then(function(resp) {
+			requireSuccess(resp, _('Failed to execute service action:'));
 			showNotification(null, E('p', turningOn ? _('Autostart enabled.') : _('Autostart disabled.')), 'info');
 		}).catch(function(err) {
 			setSwitchState(autostartSwitch, !turningOn);
@@ -1019,7 +1030,8 @@ function renderStatusHeader() {
 			var btn = ev.currentTarget;
 			btn.disabled = true;
 			btn.innerText = _('Reloading...');
-			callHonkReload().then(function() {
+			callHonkReload().then(function(resp) {
+				requireSuccess(resp, _('Failed to reload HONK:'));
 				btn.disabled = false;
 				btn.innerText = _('Reload Service');
 				showNotification(null, E('p', _('HONK service reload triggered successfully.')), 'info');
@@ -1032,18 +1044,30 @@ function renderStatusHeader() {
 	}, _('Reload Service'));
 
 	function pollCoreUpdate() {
+		// 3 download sources x 180s + checksum fetch: keep the frontend wait
+		// longer than the worst-case script so it never declares a timeout
+		// while the background task is still replacing the binary.
+		var maxTries = 360;
 		return new Promise(function(resolve, reject) {
 			var tries = 0;
+			function later() {
+				if (++tries > maxTries)
+					return reject(new Error(_('Update timed out')));
+				window.setTimeout(tick, 2000);
+			}
 			function tick() {
 				callHonkUpdateCoreStatus().then(function(st) {
 					if (st && st.status === 'OK')
 						return resolve(st);
 					if (st && st.status === 'FAILED')
 						return reject(new Error((st.log || '').trim() || _('Update failed')));
-					if (++tries > 150)
-						return reject(new Error(_('Update timed out')));
-					window.setTimeout(tick, 2000);
-				}).catch(reject);
+					return later();
+				}).catch(function() {
+					// A transient ubus failure is not a failed update: the
+					// background script keeps running. Keep polling instead
+					// of reporting failure and re-enabling the button.
+					return later();
+				});
 			}
 			tick();
 		});
@@ -1066,7 +1090,13 @@ function renderStatusHeader() {
 					return;
 				}
 				btn.innerText = _('Updating...');
-				return callHonkUpdateCore(info.latest).then(pollCoreUpdate).then(function() {
+				return callHonkUpdateCore(info.latest).then(function(resp) {
+					// Without this check a rejected RPC (bad tag / missing
+					// script) falls through to polling, which reads the stale
+					// OK left by the previous run and reports a false success.
+					requireSuccess(resp, _('Update failed'));
+					return pollCoreUpdate();
+				}).then(function() {
 					showNotification(null, E('p', _('Core updated and service restarted.')), 'info');
 				});
 			}).catch(function(err) {

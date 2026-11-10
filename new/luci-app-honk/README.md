@@ -144,10 +144,12 @@ ubus call luci.honk update_core '{}'      # 不传 tag = 取最新 release
 ubus call luci.honk update_core_status    # IDLE / RUNNING / OK / FAILED + 日志
 ```
 
-流程：`core_info` 查最新 release → `update_core` 下载对应架构的 `native-api` 资产
-（GitHub / ghfast / ghproxy 三源回退，SHA256 校验）→ 停服 → 替换 `/usr/bin/honk-core`
-（旧文件留 `.bak`）→ 重启。
-脚本 `/usr/share/honk/update_core.sh`，状态 `/tmp/honk_core_update.status`。
+流程：`core_info` 用语义化版本比较查最新 release → `update_core` 下载对应架构的
+`native-api` 资产（GitHub / ghfast / ghproxy 三源回退）→ **SHA256SUMS 只从 GitHub 官方
+release 取，取不到、资产未列出或 hash 不符一律中止** → 校验通过后才执行/替换
+`/usr/bin/honk-core`（旧文件留 `.bak`）→ 重启；服务未起来自动回滚旧 core。
+脚本 `/usr/share/honk/update_core.sh`，状态 `/tmp/honk_core_update.status`，
+并发锁 `/tmp/honk_core_update.lock`（异常中断后需手工删除该目录再重试）。
 
 ### 2. 改 Makefile 版本（钉新 release）
 
@@ -176,7 +178,7 @@ Makefile 与 CI。不带参数时自动取最新 release；只接受 release-lik
 （设备 25.12.6 装的是 25.12.5 SDK 时代打出的 r2，实测可装可跑）。
 
 ```bash
-# 准备文件树、校验 SHA256、打印打包命令（不需要 apk 工具）
+# 准备文件树、校验 SHA256、打印打包命令（不需要 apk 工具，但仍需联网下载 core）
 bash scripts/build_honk_apk.sh --dry-run
 
 # 真正打包：需要带 mkpkg 子命令的 apk（OpenWrt SDK 的 host 工具）
@@ -192,6 +194,8 @@ APK_BIN=/path/to/sdk/staging_dir/host/bin/apk \
   keep.d 是补齐手工包原本缺的一项（设备上是装完后手工补入的）
 - **注意**：设备上的运行时 `apk` 没有 `mkpkg` 子命令，必须用 SDK 的
   `staging_dir/host/bin/apk`；本仓库 CI 未跑过这一步
+- 脚本里的 `DEPENDS` 是 apk 运行期包名，与 `honk/Makefile` 的构建期 DEPENDS 语法
+  （`+`、`@KERNEL_XDP_SOCKETS`）不同；改 Makefile 依赖时需同步 review 脚本列表
 
 ### 4. 更新 Doona 面板
 
@@ -211,3 +215,13 @@ APK_BIN=/path/to/sdk/staging_dir/host/bin/apk \
 - **`MERGE-NOTES.md`**：本次合并记录、校验结果、已知限制
 
 **下次合并的 merge base**：`9936045ac52ca46a48f57f86fae1af8fa0e9134b`（2026-11-09）。
+
+## 安全边界（2026-11-10 代码级 review）
+
+- 定制文件已修：`update_core.sh` 强制 SHA256 / 失败回滚 / 并发锁；`honk.uc`
+  语义化版本比较与更新任务守卫；`common.js` 统一校验 `{ success: false }`；
+  `honk.init` 在 dae 运行时跳过 netns 清理。
+- 与上游 `9936045` 逐字节相同的文件**未改**：`download_dashboard.sh` 全程 `-k`
+  禁用 TLS 校验、`acl.d` 的 `luci.honk` read/write 全 `"*"`、面板自定义 URL 无主机
+  白名单。这三项仍是已知风险，需上游修复或单独定制才能根治。
+- po 补齐错误路径文案后需**同步重编 `luci-i18n-honk-zh-cn`** 才会生效。

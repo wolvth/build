@@ -22,6 +22,15 @@ set_chmod_640() {
     chmod 700 /etc/honk /etc/honk/config.d /etc/honk/state 2>/dev/null || true
 }
 
+# dae-core and honk-core hardcode the same datapath names (dae0/dae0peer +
+# daens). Used by both start_service() (mutual exclusion) and service_stopped()
+# (skip cleanup so stopping honk cannot tear down a running dae).
+dae_is_running() {
+    [ "$(uci -q get dae.config.enabled)" = 1 ] || return 1
+    ubus call service list '{"name":"dae"}' 2>/dev/null |
+        jsonfilter -q -e '@.dae.instances[*].running' | grep -q true
+}
+
 cleanup_netns() {
     ip netns del "$HONK_NETNS_NAME" 2>/dev/null || true
     umount "$HONK_NETNS_PATH" 2>/dev/null || true
@@ -78,9 +87,7 @@ start_service() {
 
     config_get config_file "config" "config_file" "/etc/honk/config.dae"
 
-    if [ "$(uci -q get dae.config.enabled)" = 1 ] &&
-	ubus call service list '{"name":"dae"}' 2>/dev/null |
-	jsonfilter -q -e '@.dae.instances[*].running' | grep -q true; then
+    if dae_is_running; then
         msg="dae is running; honk and dae cannot run at the same time, disable dae first"
         logger -t honk "$msg"
         printf '[%s] [init] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$msg" >> "/var/log/honk/honk.log"
@@ -114,6 +121,13 @@ start_service() {
 
 service_stopped() {
     #restore_resolv_conf
+    # dae-core uses the same netns/veth names. Tearing them down while dae is
+    # running (e.g. "honk stop" or the core updater stopping the service from
+    # the LuCI page) would break the active dae data plane.
+    if dae_is_running; then
+        logger -t honk "dae is running; skipping netns cleanup"
+        return 0
+    fi
     cleanup_netns
 }
 
