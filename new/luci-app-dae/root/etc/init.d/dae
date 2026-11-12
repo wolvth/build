@@ -35,7 +35,7 @@ start_service() {
     mkdir -p /var/log/dae
 
 	local enabled
-	config_get_bool enabled "config" "enabled" "0"
+	config_get_bool enabled "config" "enabled" "1"
 	if [ "$enabled" -ne 1 ]; then
 		init_log "dae is disabled by uci (dae.config.enabled=0), start skipped; enable it with: uci set dae.config.enabled=1 && uci commit dae"
 		return 1
@@ -91,7 +91,7 @@ reload_service() {
 	config_load "$NAME"
 
 	local enabled
-	config_get_bool enabled "config" "enabled" 0
+	config_get_bool enabled "config" "enabled" 1
 	if [ "$enabled" -ne 1 ] || ! procd_running "$NAME" "$NAME"; then
 		start
 		return

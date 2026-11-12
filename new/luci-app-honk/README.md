@@ -9,6 +9,11 @@ OpenWrt 上 honk（eBPF 透明代理，兼容 dae）的 LuCI 界面与安装包�
 i18n 0.261110.37438，`honk-core` v0.1.0-beta.6（`0.1.0_beta6`）；
 上次对齐上游 commit `9936045ac52ca46a48f57f86fae1af8fa0e9134b`（2026-11-09）。
 
+**2026-11-12 设备侧小修已入库**：`common.js` / `global.js` 的配置编辑框字段标题置空，
+`new/luci-app-dae/root/etc/init.d/dae` 的 `enabled` 缺省值统一为 1。三个文件已在设备
+运行位置直接部署并与仓库同步，**未重新编译 apk** —— 已装的 r18 / r4 包里仍是旧内容，
+重装或升级会覆盖，需重新部署或随下次发版固化。
+
 ## 软件包
 
 | 包 | 内容 |
@@ -63,7 +68,7 @@ new/luci-app-honk/
 │           │   ├── addon/             # CodeMirror 插件（上游）
 │           │   └── mode/dae/dae.js    # dae 语法高亮（上游）
 │           └── view/honk/
-│               ├── global.js          # 全局设置页（定制：保存流程、下拉框）
+│               ├── global.js          # 全局设置页（定制：保存流程、下拉框、字段标题留空）
 │               ├── dashboard.js       # 面板页（上游）
 │               ├── dns.js             # DNS 编辑页（上游）
 │               ├── node.js            # 节点编辑页（上游）

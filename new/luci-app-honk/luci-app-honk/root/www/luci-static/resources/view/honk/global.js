@@ -50,7 +50,7 @@ return view.extend({
 			]);
 		};
 
-		o = s.option(form.TextValue, '_config', _('Global Configuration'), _('Correctly configure the include field for separate-config to work, or enter complete configuration here.'));
+		o = s.option(form.TextValue, '_config', '', _('Correctly configure the include field for separate-config to work, or enter complete configuration here.'));
 		o.rows = 25;
 		o.wrap = 'off';
 		o.load = function(section_id) {

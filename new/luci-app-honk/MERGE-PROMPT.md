@@ -40,8 +40,8 @@
 | `luci-app-honk/root/usr/share/luci/menu.d/luci-app-honk.json` | Dashboard 标签 `title` 直接写「面板」 |
 | `luci-app-honk/root/usr/share/honk/update_core.sh` | **新增文件**：运行时下载/替换 core；强制 SHA256（校验文件只取官方源）、失败即中止、启动失败回滚、并发锁 |
 | `luci-app-honk/root/usr/share/rpcd/ucode/honk.uc` | 进程探针、自启动、服务控制、连接地址；`core_info` / `update_core` / `update_core_status`；`compare_version` 语义化比较与更新任务并发守卫 |
-| `.../resources/honk/common.js` | 自定义状态栏、明暗调色板、打开面板按钮、按钮配色/禁用联动、更新核心按钮、标签全显示；`requireSuccess` 统一校验 RPC 返回值 |
-| `.../resources/view/honk/global.js` | 无 enabled/advanced、变更检测保存流程、面板下拉框 |
+| `.../resources/honk/common.js` | 自定义状态栏、明暗调色板、打开面板按钮、按钮配色/禁用联动、更新核心按钮、标签全显示；`requireSuccess` 统一校验 RPC 返回值；配置编辑框字段标题留空 |
+| `.../resources/view/honk/global.js` | 无 enabled/advanced、变更检测保存流程、面板下拉框、字段标题留空 |
 | `luci-app-honk/root/etc/uci-defaults/luci-honk` | 清理 auto-subscribe 残留选项 |
 
 ### 无定制，直接取上游

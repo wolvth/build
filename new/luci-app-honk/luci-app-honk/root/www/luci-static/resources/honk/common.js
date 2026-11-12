@@ -773,7 +773,7 @@ function createConfigFileView(filePath, mapTitle, mapDesc, fieldTitle, successMs
 			s.anonymous = true;
 			s.addremove = false;
 
-			var o = s.option(form.TextValue, '_content', fieldTitle);
+			var o = s.option(form.TextValue, '_content', '');
 			o.rows = 25;
 			o.wrap = 'off';
 			o.load = function(section_id) {
