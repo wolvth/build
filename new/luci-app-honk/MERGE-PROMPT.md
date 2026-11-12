@@ -1,7 +1,7 @@
 # 上游合并交接文档（MERGE-PROMPT.md）
 
 > **用途**：上游 `QiuSimons/luci-app-honk` 更新后，把本文件交给 AI 即可按同样的方法合并。
-> 本文件以 2026-11-10 的 r18（当前 HEAD `9ab397c`）为基准，定制清单与裁决原则均按当前代码核对过。
+> 定制清单与裁决原则以**当前 `main`** 为准（开工先 `git log -1`）；过程性记录不在此文件。
 
 ---
 
@@ -17,7 +17,7 @@
   `9936045ac52ca46a48f57f86fae1af8fa0e9134b`（2026-11-09）
 - ⚠️ 每次合并完成后，把上面的 commit 更新为本次合并到的上游 commit
 
-## 二、定制文件清单（按当前 r17 实测）
+## 二、定制文件清单（按当前 `main` 核对）
 
 路径相对 `new/luci-app-honk/`。**只有下表列出的文件需要三方合并**。
 
@@ -89,19 +89,20 @@
    无变更 → 不动服务；只在有暂存 uci 变更时才 `ui.changes.apply`。
 9. **doona 面板没有定制**，直接整体替换为上游最新版，不要三方合并。
 10. **`luci-app-honk/Makefile` 保留「不依赖 `+honk`」**，但跟随上游加 `+unzip`。
-11. **2026-11-10 review 的安全修复必须保留**：`update_core.sh` 的强制 SHA256 /
+11. **代码级 review 的安全修复必须保留**：`update_core.sh` 的强制 SHA256 /
     失败回滚 / 并发锁；`honk.uc` 的 `compare_version` 与 `start_core_update` 守卫；
     `common.js` 的 `requireSuccess`；`honk.init` 的 `dae_is_running` 守卫。
     上游若改这些文件，按「我的定制功能 > 上游行为改动」裁决。
-    **`dae_is_running` 守卫不可删**：20:33 实测，无守卫时 dae running 下执行
-    `honk stop` 会删掉 `daens` / `dae0` / `dae0peer`，而 dae 进程仍显示 running。
+    **`dae_is_running` 守卫不可删**：真机实测，无守卫时 dae running 下执行
+    `honk stop` 会删掉 `daens` / `dae0` / `dae0peer`，而 dae 进程仍显示 running
+    （控制面在、数据面已断）。防再犯约束见 `MERGE-NOTES.md` 第二节。
 
 ## 四、合并方法
 
 ```bash
 # amd（/root/github/build 需要 sudo -n）
 git fetch https://github.com/QiuSimons/luci-app-honk.git master:refs/remotes/honk-upstream/master
-git bundle create /root/honk-merge/pre-merge-$(date +%Y%m%d).bundle --all   # 备份
+git bundle create /root/pre-merge-$(date +%Y%m%d).bundle --all   # 备份（别放仓库工作区内）
 git branch backup/honk-pre-merge-$(date +%Y%m%d) main
 
 # 三份快照用 stdout 直接回传本地，不必堆 /tmp
@@ -145,13 +146,15 @@ git merge-file -p --diff3 "local/$f" "base/$f" "upstream/$f" > "merged/$f"
 - [ ] `update_core.sh`：SHA256SUMS 取不到 / 资产未列出 / hash 不符时 FAILED 且不执行、不替换 core
 - [ ] `honk.uc` 用 `ucode -c` 通过；`compare_version` 对 `beta.10 > beta.6`、正式版 > 预发布结果正确
 - [ ] `common.js` 所有写操作按钮都经过 `requireSuccess`，`update_core` 派发失败不会误报成功
-- [ ] 装包后复核：仓库 `root/` 163 文件，设备命中 162 且 md5 全部相等（唯一缺 uci-defaults）
+- [ ] 装包后复核：仓库 `root/` 163 文件，设备命中 162 且 md5 全部相等（唯一缺 uci-defaults）。
+      注意 11-12 的三个文件是设备直接部署、未重打包；若本次合并仍未重编译 apk，
+      装包会把它们覆盖回旧内容，见 `MERGE-NOTES.md` 第一节
 
 ## 六、任务提示词
 
 ```
 请帮我把上游 QiuSimons/luci-app-honk 的更新合并到定制版 wolvth/build。
-先读 new/luci-app-honk/MERGE-PROMPT.md（同目录 MERGE-NOTES.md 是本次合并记录与校验）。
+先读 new/luci-app-honk/MERGE-PROMPT.md（同目录 MERGE-NOTES.md 是历史裁决与已知限制）。
 要求：按第三节裁决原则保留定制、吸收上游修复；按第四节做三方合并，merge base 用第一节
 记录的 commit；合并后按第五节清单验证；给我变更清单：每个文件改了什么、为什么、
 哪些是上游改动哪些是裁决；完成后提醒我更新第一节的 merge base commit。

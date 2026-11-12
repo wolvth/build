@@ -9,10 +9,10 @@ OpenWrt 上 honk（eBPF 透明代理，兼容 dae）的 LuCI 界面与安装包�
 i18n 0.261110.37438，`honk-core` v0.1.0-beta.6（`0.1.0_beta6`）；
 上次对齐上游 commit `9936045ac52ca46a48f57f86fae1af8fa0e9134b`（2026-11-09）。
 
-**2026-11-12 设备侧小修已入库**：`common.js` / `global.js` 的配置编辑框字段标题置空，
-`new/luci-app-dae/root/etc/init.d/dae` 的 `enabled` 缺省值统一为 1。三个文件已在设备
-运行位置直接部署并与仓库同步，**未重新编译 apk** —— 已装的 r18 / r4 包里仍是旧内容，
-重装或升级会覆盖，需重新部署或随下次发版固化。
+11-12 设备侧三处小修（`common.js` / `global.js` 的字段标题置空、
+`new/luci-app-dae/root/etc/init.d/dae` 的 `enabled` 缺省值统一为 1）已入库并回写设备，
+**未重新编译 apk**：已装的 r18 / r4 包里仍是旧内容，重装或升级会覆盖，
+需重新部署或随下次发版固化。已知限制见 `MERGE-NOTES.md`。
 
 ## 软件包
 
@@ -28,7 +28,7 @@ i18n 0.261110.37438，`honk-core` v0.1.0-beta.6（`0.1.0_beta6`）；
 new/luci-app-honk/
 ├── README.md                    # 本文件：项目说明、目录结构、更新方式
 ├── MERGE-PROMPT.md              # 上游合并执行手册（下次合并看这个）
-├── MERGE-NOTES.md               # 本次合并记录、校验结果、已知限制
+├── MERGE-NOTES.md               # 历史裁决、防再犯约束、已知限制
 ├── PIC/PIC.jpg                  # README 配图（上游）
 │
 ├── honk/                        # 核心包
@@ -172,12 +172,9 @@ Makefile 与 CI。不带参数时自动取最新 release；只接受 release-lik
 
 | 项 | 说明 |
 | --- | --- |
-| **作用** | 产出独立的 `honk` 核心包 apk（`/usr/bin/honk-core` + `/etc/honk/` 配置 + init），复现设备上 `honk-0.1.0_beta6-r2` 的构建过程 |
-| **谁用** | **仓库维护者 / 发版者手动执行**。`.github/` 下任何 workflow **都不调用它**（`grep -rn build_honk_apk .github/` 无结果），普通 CI 构建走 SDK 的 `make` |
-| **何时用** | 需要单独产出或重装核心包时：换装测试、给设备单独装核心、复现或核对 r2 包内容、SDK 依赖链拖住编译时的替代路径 |
-| **不做什么** | 不构建 `luci-app-honk` / i18n；不替代 `honk/Makefile` 的标准编译；不自动改版本号（`--release` 由调用方显式指定）；不写回仓库；不参与 CI |
-| **依赖谁** | 读 `honk/Makefile` 里由 `update_honk_version.sh` 维护的 tag / 变体 / SHA256；与 `update_doona.sh`（管面板）无关 |
-| **谁维护** | 属本地定制，合并上游时按 `MERGE-PROMPT.md` 定制清单保留，不要用上游文件覆盖 |
+| **作用** | 产出独立的 `honk` 核心包 apk（`/usr/bin/honk-core` + `/etc/honk/` 配置 + init） |
+| **谁用 / 何时用** | 仓库维护者手动执行（`.github/` 下任何 workflow 都不调用它，普通 CI 走 SDK `make`）；用于换装测试、单独装核心、复现 r2 包内容、绕开 SDK 依赖链 |
+| **边界** | 不构建 `luci-app-honk` / i18n；不自动改版本号（`--release` 由调用方指定）；不写回仓库；不参与 CI。读 `honk/Makefile` 的 tag / 变体 / SHA256，合并上游时按 `MERGE-PROMPT.md` 定制清单保留 |
 
 它不跑 SDK 的 `make`，直接把 release 预编译二进制 + 本仓库的 init/config 打进 apk，
 因此不绑定 SDK 的内核配置，跨 25.12.x 小版本可安装——这是选它而非 SDK 标准编译的原因
@@ -218,11 +215,11 @@ APK_BIN=/path/to/sdk/staging_dir/host/bin/apk \
 ## 合并上游
 
 - **`MERGE-PROMPT.md`**：合并执行手册（merge base、定制文件清单、裁决原则、验证清单）
-- **`MERGE-NOTES.md`**：本次合并记录、校验结果、已知限制
+- **`MERGE-NOTES.md`**：历史裁决、防再犯约束、已知限制
 
 **下次合并的 merge base**：`9936045ac52ca46a48f57f86fae1af8fa0e9134b`（2026-11-09）。
 
-## 安全边界（2026-11-10 代码级 review）
+## 已知限制与安全边界
 
 - 定制文件已修：`update_core.sh` 强制 SHA256 / 失败回滚 / 并发锁；`honk.uc`
   语义化版本比较与更新任务守卫；`common.js` 统一校验 `{ success: false }`；
@@ -232,3 +229,5 @@ APK_BIN=/path/to/sdk/staging_dir/host/bin/apk \
   白名单。这三项仍是已知风险，需上游修复或单独定制才能根治。
 - po 补齐错误路径文案后需**同步重编 `luci-i18n-honk-zh-cn`** 才会生效
   （r18 已随 0.261110.37438 重编并安装，lmo 新文案实测命中）。
+
+> 防再犯约束与完整已知限制见 `MERGE-NOTES.md`。
