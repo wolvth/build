@@ -147,7 +147,7 @@ git merge-file -p --diff3 "local/$f" "base/$f" "upstream/$f" > "merged/$f"
 - [ ] `honk.uc` 用 `ucode -c` 通过；`compare_version` 对 `beta.10 > beta.6`、正式版 > 预发布结果正确
 - [ ] `common.js` 所有写操作按钮都经过 `requireSuccess`，`update_core` 派发失败不会误报成功
 - [ ] 装包后复核：仓库 `root/` 163 文件，设备命中 162 且 md5 全部相等（唯一缺 uci-defaults）。
-      注意 11-12 的三个文件是设备直接部署、未重打包；若本次合并仍未重编译 apk，
+      注意 11-12 的两个 JS 是设备直接部署、未重打包；若本次合并仍未重编译 apk，
       装包会把它们覆盖回旧内容，见 `MERGE-NOTES.md` 第一节
 
 ## 六、任务提示词
