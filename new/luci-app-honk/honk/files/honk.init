@@ -93,7 +93,7 @@ start_service() {
     config_get config_file "config" "config_file" "/etc/honk/config.dae"
 
     if dae_is_running; then
-        msg="dae is running; honk and dae cannot run at the same time, disable dae first"
+        msg="dae is running; honk and dae cannot run at the same time, stop dae first"
         logger -t honk "$msg"
         printf '[%s] [init] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$msg" >> "/var/log/honk/honk.log"
 	return 1
