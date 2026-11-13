@@ -28,7 +28,6 @@ new/luci-app-honk/
 ├── README.md                    # 本文件：项目说明、目录结构、更新方式
 ├── MERGE-PROMPT.md              # 上游合并执行手册（下次合并看这个）
 ├── MERGE-NOTES.md               # 历史裁决、防再犯约束、已知限制
-├── PIC/PIC.jpg                  # README 配图（上游）
 │
 ├── honk/                        # 核心包
 │   ├── Makefile                 # 包定义（定制：下载 release + postinst 禁用）

@@ -21,13 +21,12 @@ on:
         description: '是否启用磁盘清理优化'
         type: boolean
         default: false # 默认不启用！
-        
       upload_release:
         description: '发布到 Release (Upload to Release)'
         required: false
         type: boolean
         default: true
-        
+
       ssh_sync:
         description: '开启 VPS 私人同步'
         type: boolean
@@ -61,18 +60,18 @@ env:
   CUSTOM_FILES_DIR: files
   REPO_LIST_FILE: repos.list
   TZ: Asia/Shanghai
-  
+
 permissions:
-  contents: write  
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-24.04
-    
+
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v6
-      
+
     - name: Print hardware info
       run: |
         echo "=== OS ==="
@@ -85,7 +84,7 @@ jobs:
         echo "=== Memory ==="
         free -h
         echo "=== CPU details (proc) ==="
-        head -n 20 /proc/cpuinfo          
+        head -n 20 /proc/cpuinfo
 
     - name: Optimize Disk Space
       uses: hugoalh/disk-space-optimizer-ghaction@v0.8.1
@@ -134,11 +133,11 @@ jobs:
         sudo chown "$USER:$(id -gn)" "$GITHUB_WORKSPACE" || fail "chown workspace"
 
         echo "✅ 依赖安装完成（$(wc -l < "$LOG") 行输出已折叠到 $LOG）"
-        
+
     - name: Clone Source Code
       run: |
         echo "Cloning branch: ${{ env.REPO_BRANCH }}"
-        git clone --depth 1 --branch ${{ env.REPO_BRANCH }} $REPO_URL openwrt        
+        git clone --depth 1 --branch ${{ env.REPO_BRANCH }} $REPO_URL openwrt
 
     # =======================================================
     #  私人 VPS 同步 (SSH Key 版)
@@ -152,27 +151,26 @@ jobs:
         REMOTE_PATH: ${{ inputs.remote_path }}
       run: |
         echo "=== 开始私人定制同步 ==="
-        
         # 1. 配置 SSH Key
         mkdir -p ~/.ssh
         echo "$SSH_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
         ssh-keyscan -H $VPS_HOST >> ~/.ssh/known_hosts
         SSH_OPTS="-i ~/.ssh/id_rsa -o BatchMode=yes -o ConnectTimeout=10"
-        
+
         # 2. 同步 files 目录
         # 注意: 远程路径末尾加斜杠表示同步目录
         ssh $SSH_OPTS $VPS_USER@$VPS_HOST "bash $REMOTE_PATH/rsync.sh > /dev/null"
         echo "[OK] remote script done"
-        
+
         mkdir -p files/etc/uci-defaults/
         echo "同步VPS上 files 目录...到当前工作区 files"
         rsync -az --quiet -e "ssh $SSH_OPTS" \
-          $VPS_USER@$VPS_HOST:$REMOTE_PATH/files/ files/          
+          $VPS_USER@$VPS_HOST:$REMOTE_PATH/files/ files/
         echo " 🛻 files 目录同步完成，当前 content:"
         ls -F files/etc/
         ls -laF files/root/
-        
+
         echo " 🛻 同步uci-defaults"
         rsync -avz -e "ssh $SSH_OPTS" \
           $VPS_USER@$VPS_HOST:$REMOTE_PATH/uci-defaults/ files/etc/uci-defaults/
@@ -181,9 +179,9 @@ jobs:
         mkdir -p new
         echo "同步VPS上 new 目录...到当前工作区 new"
         rsync -avz -e "ssh $SSH_OPTS" \
-          $VPS_USER@$VPS_HOST:$REMOTE_PATH/new/ new/         
+          $VPS_USER@$VPS_HOST:$REMOTE_PATH/new/ new/
         echo " ✅ 同步完成，当前 new 目录："
-        ls -F new/        
+        ls -F new/
 
         # ======== 追加 custom.config repos.list ========
         # 读取 VPS 上的 /new/diy.config，追加到本地 custom.config     
@@ -214,7 +212,7 @@ jobs:
         rm -rf package/boot/arm-trusted-firmware-rockchip
         rm -rf package/boot/rkbin
         rm -rf target/linux/rockchip/image
-        
+
         # 钉住 commit：openwrt-25.12 是分支，imm 侧改动会静默改变引导流程
         # sparse 只取需要的 3 个目录，全量 clone 约 400MB，这里不到 10MB
         git clone --depth 1 -b openwrt-25.12 --filter=blob:none --sparse \
@@ -235,21 +233,21 @@ jobs:
          # 4. 生成适配 R4S 的 armv8.mk
         cd target/linux/rockchip/image
         rm -f *.mk
-        
+
         cat <<EOF > armv8.mk
         define Device/rk3399
           SOC := rk3399
           KERNEL_LOADADDR := 0x03200000
           BOOT_FLOW := pine64-bin
         endef
-        
+
         define Device/friendlyarm_nanopi-r4s
           \$(Device/rk3399)
           DEVICE_VENDOR := FriendlyARM
           DEVICE_MODEL := NanoPi R4S
           DEVICE_PACKAGES := kmod-r8169
         endef
-        
+
         TARGET_DEVICES += friendlyarm_nanopi-r4s
         EOF
 
@@ -266,7 +264,7 @@ jobs:
         ./scripts/feeds install -a >"$LOG" 2>&1 || { echo "feeds install failed:"; tail -n 100 "$LOG"; exit 1; }
 
         echo ">>> feeds updated and installed successfully"
-        
+
     # ==================== 下载与同步插件 ====================
     - name: Download & Prepare Custom Packages
       run: |
@@ -279,16 +277,15 @@ jobs:
           git_repo_url=$(echo $rurl | sed -E "s|/tree/.*||")
           subdir=$(echo $rurl | sed -E "s|.*/tree/$branch/||")
           pkg_name=$(basename $subdir)
-          
+
           echo "Processing: $pkg_name from $subdir"
-          
           # 临时目录处理
           tmpdir="tmp_checkout_$(date +%s%N)"
           git clone --depth 1 --filter=blob:none --sparse $git_repo_url $tmpdir
           cd $tmpdir
           git sparse-checkout set $subdir
           git checkout $branch
-          
+
           # 移动到 openwrt/package/custom_repos/
           target_path="../openwrt/package/custom_repos/$pkg_name"
           if [ -d "$target_path" ]; then rm -rf "$target_path"; fi
@@ -296,7 +293,7 @@ jobs:
           cd ..
           rm -rf $tmpdir
         }
-          
+
         # ⬇️📝 1. 处理 repos.list
         echo "  ☁️ Git clone repos.lit..."
         if [ -f "$GITHUB_WORKSPACE/$REPO_LIST_FILE" ]; then
@@ -321,10 +318,10 @@ jobs:
           echo "  📂 Copying local custom packages...new"
           cp -r $GITHUB_WORKSPACE/$CUSTOM_PKG_DIR/* openwrt/package/custom_repos/ || true
         fi
-        
+
         echo "  😋 检查package目录下的自定义插件仓库"
         ls -lh openwrt/package/custom_repos
-        
+
     # ===== 可选：刷新 honk 核心版本与 Doona 面板（默认关闭，仅影响本次构建） =====
     - name: Refresh honk core version & Doona panel (optional)
       if: ${{ inputs.refresh_honk_assets }}
@@ -368,7 +365,7 @@ jobs:
 
             # 🎯 优先处理 define Package/ (准确度最高，因为一源多包)
             objs=$(grep -E "^define Package/[^/]+[[:space:]]*$" "$makefile" | sed -E 's/^define Package\///' | sed -E 's/[[:space:]]*$//')
-            
+
             for pkg in $objs; do
                 # 情况 A: 定义使用了变量 $(PKG_NAME)，且我们提取到了变量值 -> 使用变量值
                 if [[ "$pkg" == *"\$(PKG_NAME)"* ]]; then
@@ -414,7 +411,7 @@ jobs:
             line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
             # 跳过空行
             if [[ -z "$line" ]]; then continue; fi
-            
+
             # !!!优先处理 "is not set" 的标准禁用格式
             # 使用正则匹配：以 "# CONFIG_" 开头，以 "is not set" 结尾
             if [[ "$line" =~ ^#\ CONFIG_.*\ is\ not\ set$ ]]; then
@@ -422,22 +419,22 @@ jobs:
                 echo "  [Explicit Disable]: $line"
                 continue
             fi
-            
+
             # 跳过普通注释 (以 # 开头的其他内容)
             if [[ "$line" == \#* ]]; then continue; fi
-            
+
             # 处理其他情况
             # a. 标准开启 (CONFIG_xxx=y|m|n)
             if [[ "$line" == CONFIG_* ]]; then
                 echo "$line" >> auto_packages.txt
                 echo "  [Config Enable]: $line"
-                
+
             # b. 简写禁用 (-包名) -> 自动转为 is not set
             elif [[ "$line" == -* ]]; then
                 pkg_name=${line:1}
                 echo "# CONFIG_PACKAGE_$pkg_name is not set" >> auto_packages.txt
                 echo "  [Package Disable]: $pkg_name"
-                
+
             # c. 简写开启 (包名) -> 自动转为 =y
             else
                 echo "CONFIG_PACKAGE_$line=y" >> auto_packages.txt
@@ -459,9 +456,8 @@ jobs:
           echo "🔴 加载仓库 files 目录..."
           mkdir -p openwrt/files
           cp -r "$GITHUB_WORKSPACE/$CUSTOM_FILES_DIR"/* openwrt/files/
-          chmod -R +x openwrt/files/root/sh/* || true
         fi
-        
+
         # 2. 加载基础 .config (从仓库config/ 目录)
         if [ -e "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
             echo "🔴 加载仓库配置文件: $CONFIG_FILE"
@@ -470,9 +466,9 @@ jobs:
             echo "::error::Config file $CONFIG_FILE not found!"
             exit 1
         fi
-        
+
         # ✅ 修复 Go 路径
-        sed -i '/CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT/d' openwrt/.config    
+        sed -i '/CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT/d' openwrt/.config
         echo "✅ 前面处理custom.config得到auto_packages 追加到.config"
         cat auto_packages.txt >> openwrt/.config
 
@@ -554,28 +550,27 @@ jobs:
         ./scripts/diffconfig.sh > config.diff
         cat config.diff
         echo "==================== end diffconfig ====================="
-        
+
     # 1️⃣ 获取设备架构信息 (为 Toolchain 缓存做准备)
     - name: Get Cache Infos
       id: get_info
       run: |
         # 指向你的 .config 路径
-        MY_CONFIG_PATH="openwrt/.config" 
-        
+        MY_CONFIG_PATH="openwrt/.config"
         # 提取 Target 和 Subtarget
         TARGET=$(grep "^CONFIG_TARGET_BOARD" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}')
         SUBTARGET=$(grep "^CONFIG_TARGET_SUBTARGET" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}')
         PROFILE=$(grep "^CONFIG_TARGET_PROFILE" "$MY_CONFIG_PATH" | awk -F '"' '{print $2}' | sed 's/^DEVICE_//')
-        
+
         echo "Detected Architecture: $TARGET - $SUBTARGET"
-        
+
         echo "DEVICE_TARGET=$TARGET" >> $GITHUB_ENV
         echo "DEVICE_SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
         echo "DEVICE_PROFILE=$PROFILE" >> $GITHUB_ENV
-    
+
     # 2️⃣ 缓存工具链 (跳过编译 GCC 的漫长过程)
     - name: Cache Toolchain
-      if: inputs.cache_toolchain == true  
+      if: inputs.cache_toolchain == true
       uses: HiGarfield/cachewrtbuild@main
       with:
         ccache: true   # 默认关闭
@@ -638,7 +633,7 @@ jobs:
         echo "✅ Compilation finished. Cleaning up..."
         ls -lh bin/targets/rockchip/armv8/ || true
         df -hT
-        
+
     - name: Organize Files
       id: organize
       if: steps.compile.outputs.status == 'success'
