@@ -12,14 +12,13 @@
 
 ```text
 new/luci-app-natmapt/
-├── README.md             # 本文件（唯一文档）
-├── SHA256SUMS.custom     # 10 个定制文件校验值，在此目录跑 sha256sum -c
-├── natmapt/              # 核心包：package.mk + files/
-└── luci-app-natmap/      # 界面包：luci.mk + htdocs/ root/ po/zh_Hans/
+          ├── README.md             # 本文件（唯一文档）
+          ├── SHA256SUMS.custom     # 10 个定制文件校验值，在此目录跑 sha256sum -c
+          ├── natmapt/              # 核心包：package.mk + files/
+          └── luci-app-natmap/      # 界面包：luci.mk + htdocs/ root/ po/zh_Hans/
 ```
 
-结构照 `new/luci-app-honk/`：外层是包组，两个子目录各有一个 Makefile、独立编译。
-子目录名与包名不完全一致（`luci-app-natmap/` 对应包名 `luci-app-natmapt`），
+外层是包组，两个子目录各有一个 Makefile、独立编译。
 Makefile 里用 `PKG_NAME` 显式指定，不要靠目录名推断。
 
 ## 为什么定制
@@ -27,13 +26,12 @@ Makefile 里用 `PKG_NAME` 显式指定，不要靠目录名推断。
 上游功能完整，但这套设备环境有五个痛点：
 
 1. 日志混在 syslog，无法单独排查 → 独立日志文件 + Log 页面。
-2. 加一条静态路由就重启全部实例、重跑所有回调 → 收窄触发器 + 增量 reload。
+2. 涉及network的任何变动，都会重启全部实例、重跑所有回调 → 收窄触发器 + 增量 reload。
 3. 单实例重启波及同接口所有实例（上游都绑 `br-lan`）→ 删 `br-lan`，只绑 `bind_ifname`。
 4. 开机 WAN 拨号慢，实例先崩 → 等接口就绪 + 一次性 booted 标记。
 5. procd 5 次/小时就放弃重启 → `respawn 3600 5 0`，永不放弃。
 
-另补齐 TXT 记录 DDNS；保留单实例刷新等手动语义，但改用显式命令，
-不再依赖 `reload` 的空串/无参魔法分派。
+保留单实例刷新等手动语义，但改用显式命令，不再依赖 `reload` 的空串/无参魔法分派。
 
 ## 两个子包
 
@@ -64,25 +62,6 @@ Telegram 加固通知脚本随核心包安装（上游拆成独立包，这里�
 其余文件（common.sh、Cloudflare、ntfy、Pushbullet、Pushover、Transmission、Deluge、
 ucode 后端、natcheck.sh、zh_Hans po）与上游 `7ee3bcb` / `1b023f9` 完全一致。
 校验值统一放在本目录 `SHA256SUMS.custom`。
-
-## 编译
-
-CI 自动把 `new/*` 复制到 `openwrt/package/custom_repos/`，两个子包各自被扫描。
-本地编译可把本目录放到 SDK 的 `package/` 下：
-
-```sh
-make package/luci-app-natmapt/natmapt/compile -j$(nproc)
-make package/luci-app-natmapt/luci-app-natmap/compile -j$(nproc)
-```
-
-Single Plugin workflow：`plugin_subdir=new/luci-app-natmapt/natmapt` 或
-`new/luci-app-natmapt/luci-app-natmap`（`package_name` 留空，以 Makefile 为准）。
-
-## 升级设备时的注意
-
-设备原先靠 `/root/other/natmap/install.sh` 覆盖 apk 文件维持定制。改用本包后，
-定制已固化在包里，不必每次 `apk upgrade` 后重跑 `install.sh`。
-`/etc/config/natmap` 是 conffiles，刷机保留，通知 token 等配置不丢。
 
 ## 上游与许可
 
