@@ -14,7 +14,6 @@ LUCI_DEPENDS:=+luci-base +coreutils-timeout
 LUCI_PKGARCH:=all
 LUCI_DESCRIPTION:=TCP/UDP port mapping tool for full cone NAT (customized)
 PKG_LICENSE:=Apache-2.0
-PKG_MAINTAINER:=hayse
 
 include $(TOPDIR)/feeds/luci/luci.mk
 
