@@ -15,11 +15,11 @@ new/luci-app-natmapt/
           ├── README.md             # 本文件（唯一文档）
           ├── SHA256SUMS.custom     # 10 个定制文件校验值，在此目录跑 sha256sum -c
           ├── natmapt/              # 核心包：package.mk + files/
-          └── luci-app-natmap/      # 界面包：luci.mk + htdocs/ root/ po/zh_Hans/
+          └── luci-app-natmapt/      # 界面包：luci.mk + htdocs/ root/ po/zh_Hans/
 ```
 
 外层是包组，两个子目录各有一个 Makefile、独立编译。
-Makefile 里用 `PKG_NAME` 显式指定，不要靠目录名推断。
+界面子目录名必须与 PKG_NAME 一致（luci.mk 默认取目录名为 LUCI_NAME；若写成 luci-app-natmap，Kconfig 会注册错误符号，包无法选中/编译）。
 
 ## 为什么定制
 
@@ -38,7 +38,7 @@ Makefile 里用 `PKG_NAME` 显式指定，不要靠目录名推断。
 | 子包 | 产物 | 依赖 |
 | --- | --- | --- |
 | `natmapt/` | `natmapt 20261109-r2`（target）+ 4 个可选脚本包 | `+curl +jsonfilter +bash` |
-| `luci-app-natmap/` | `luci-app-natmapt` + `luci-i18n-natmapt-zh-cn` | `+luci-base +coreutils-timeout` |
+| `luci-app-natmapt/` | `luci-app-natmapt` + `luci-i18n-natmapt-zh-cn` | `+luci-base +coreutils-timeout` |
 
 依赖全在 OpenWrt 官方 feeds，无需三方源。界面包 include 官方 `luci.mk`，
 po 只放 `zh_Hans/natmap.po`，中文翻译包自动生成、无需手选。
@@ -53,11 +53,11 @@ Telegram 加固通知脚本随核心包安装（上游拆成独立包，这里�
 | `natmapt/files/lib/natmap/bin/logger` | 回调输出写 `/var/log/natmap.log` 而非 syslog（新增） |
 | `natmapt/files/notify/Telegram` | HTTP 状态码校验、HTML 转义、jq 构造 payload、429 retry_after 退避、按 bind_ifname 标注运营商 |
 | `natmapt/files/client/qBittorrent` | curl 静默 + 超时/重试、改端口 `-o /dev/null`、logout 由 `-I` 改 `-X POST`、空 cookie 返回 1 |
-| `luci-app-natmap/htdocs/.../view/natmap.js` | 全局 Reload → `resync`；行内 ↻ → `restart_instance` 并刷新 |
-| `luci-app-natmap/htdocs/.../view/natmap/log.js` | 日志查看/过滤/暂停/清空，rpc 抖动不清屏（新增） |
-| `luci-app-natmap/htdocs/.../status/include/72_natmap.js` | 状态页加转发模式/目标/目标端口三列 |
-| `luci-app-natmap/root/.../menu.d/luci-app-natmap.json` | firstchild + config/log 两个标签 |
-| `luci-app-natmap/root/.../rpcd/acl.d/luci-app-natmap.json` | 四条显式命令逐条放行 + 日志文件读写 |
+| `luci-app-natmapt/htdocs/.../view/natmap.js` | 全局 Reload → `resync`；行内 ↻ → `restart_instance` 并刷新 |
+| `luci-app-natmapt/htdocs/.../view/natmap/log.js` | 日志查看/过滤/暂停/清空，rpc 抖动不清屏（新增） |
+| `luci-app-natmapt/htdocs/.../status/include/72_natmap.js` | 状态页加转发模式/目标/目标端口三列 |
+| `luci-app-natmapt/root/.../menu.d/luci-app-natmap.json` | firstchild + config/log 两个标签 |
+| `luci-app-natmapt/root/.../rpcd/acl.d/luci-app-natmap.json` | 四条显式命令逐条放行 + 日志文件读写 |
 
 其余文件（common.sh、Cloudflare、ntfy、Pushbullet、Pushover、Transmission、Deluge、
 ucode 后端、natcheck.sh、zh_Hans po）与上游 `7ee3bcb` / `1b023f9` 完全一致。
