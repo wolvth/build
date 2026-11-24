@@ -2,37 +2,51 @@
 # Copyright (C) 2023-2025 muink https://github.com/muink
 #
 # Client listen port refresh script
-#
-# depends 
+
+# /etc/natmap/client/qBittorrent
 
 . /usr/lib/natmap/common.sh
 
 start() {
-	local retry='--connect-timeout 1 --retry 0'
-	local self_signed='-k'
-	local payload
-	case "$(basename "$0")" in
-		qBittorrent)
-			payload='json={"listen_port":'"${port}"'}';;
-		qBittorrent-announce_port)
-			payload='json={"announce_port":'"${port}"'}';;
-		*)
-			payload='json={"listen_port":'"${port}"'}';;
-	esac
-	local cookie="$($CURL $retry $self_signed -L -i \
-		-H "Referer: ${scheme}://${host}:${web_port}" \
-		-d "username=${username}&password=${password}" \
-		--url ${scheme}://${host}:${web_port}/api/v2/auth/login \
-		| grep -i set-cookie | sed -En 's#^.*\b((SID|QBT_SID_'"${web_port}"')=[^;]+);.*#\1#p')"
-	$CURL $retry $self_signed -L -X POST \
-		-b "$cookie" \
-		-d "$payload" \
-		--url ${scheme}://${host}:${web_port}/api/v2/app/setPreferences
-	$CURL $retry $self_signed -L -I \
-		--cookie "$cookie" \
-		--url ${scheme}://${host}:${web_port}/api/v2/auth/logout
-}
+        # 优化 curl 参数：-s (静默), -S (出错显示), --connect-timeout (超时)
+        local curl_opts="-s -S --connect-timeout 2 --retry 1 -k"
+        local payload
+        case "$(basename "$0")" in
+                qBittorrent)
+                        payload='json={"listen_port":'"${port}"'}';;
+                qBittorrent-announce_port)
+                        payload='json={"announce_port":'"${port}"'}';;
+                *)
+                        payload='json={"listen_port":'"${port}"'}';;
+        esac
 
+        # 1. 登录并获取 Cookie (使用 -i 获取响应头，grep 提取 SID)
+        # 【2026-11-05】qBittorrent 4.6+ 把 cookie 名从 SID 改成 QBT_SID_<web_port>
+        # （本机实测 v5.2.4.10 返回 QBT_SID_8080）。这里同时兼容两种命名：
+        #   SID=            -> 4.6 以前
+        #   QBT_SID_<port>  -> 4.6 及以后
+        # \b 保证 SID 分支不会误匹配 QBT_SID_8080（_ 与 S 之间无词边界）。
+        local cookie=$($CURL $curl_opts -i \
+                -H "Referer: ${scheme}://${host}:${web_port}" \
+                -d "username=${username}&password=${password}" \
+                --url "${scheme}://${host}:${web_port}/api/v2/auth/login" \
+                | grep -i set-cookie | sed -En 's#^.*\b((SID|QBT_SID_'"${web_port}"')=[^;]+);.*#\1#p')
+
+        if [ -z "$cookie" ]; then
+            return 1
+        fi
+
+        # 2. 修改端口 (-o /dev/null 隐藏响应体，避免写进 natmap 日志)
+        $CURL $curl_opts -X POST -o /dev/null \
+                -b "$cookie" \
+                -d "$payload" \
+                --url "${scheme}://${host}:${web_port}/api/v2/app/setPreferences"
+
+        # 3. 退出登录 (修正：使用 POST 方法，而不是 -I)
+        $CURL $curl_opts -X POST \
+                -b "$cookie" \
+                --url "${scheme}://${host}:${web_port}/api/v2/auth/logout"
+}
 
 # All external parameters required
 ALL_PARAMS="host port scheme web_port username password"
