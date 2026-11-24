@@ -1,11 +1,16 @@
-# luci-app-natmapt（定制界面包）
+# natmapt（上游定制包组）
 
-上游 [muink/luci-app-natmapt](https://github.com/muink/luci-app-natmapt) `1b023f9`
-的定制界面包，位于 `wolvth/build` 仓库 `new/luci-app-natmapt/`。核心包在姊妹目录
-`new/natmapt/`。**不是** OpenWrt 源里的原始 `luci-app-natmap` 包。
+位于 `wolvth/build` 仓库 `new/luci-app-natmapt/`，结构照 `new/luci-app-honk/`：
 
-Makefile 直接 include 官方 `luci.mk`，因此翻译包（`luci-i18n-natmapt-*`）
-按标准机制自动生成——选中本包后中文包默认随同编译，无需额外配置。
+```text
+new/luci-app-natmapt/
+├── natmapt/              # 核心包：natmap 二进制 + 定制脚本
+└── luci-app-natmap/      # LuCI 界面包 + 中文翻译
+```
+
+上游基准：[muink/openwrt-natmapt](https://github.com/muink/openwrt-natmapt) `7ee3bcb`
++ [muink/luci-app-natmapt](https://github.com/muink/luci-app-natmapt) `1b023f9`。
+**不是** OpenWrt 源里的原始 `natmap` / `luci-app-natmap` 包；包名、UCI 配置、LuCI URL 全部沿用 natmapt 体系。
 
 ## 解决什么问题
 
@@ -19,32 +24,35 @@ Makefile 直接 include 官方 `luci.mk`，因此翻译包（`luci-i18n-natmapt-
 
 另补齐 TXT 记录 DDNS；保留单实例刷新等手动语义，但改用显式命令，不再依赖 `reload` 的空串/无参魔法分派。
 
-## 软件包
+## 两个子包
 
-| 包名 | 说明 |
-| --- | --- |
-| `luci-app-natmapt` | LuCI 界面：Settings / Log 两个标签、状态页转发三列 |
-| `luci-i18n-natmapt-*` | 20 种语言翻译（含 zh-cn/zh-tw），luci.mk 自动生成、默认选中 |
+| 子包 | 产物 | 内容 |
+| --- | --- | --- |
+| `natmapt/` | `natmapt 20261109-r2` + 4 个可选脚本包 | 二进制 + 5 个核心定制（init/update/logger/Telegram/qBittorrent） |
+| `luci-app-natmap/` | `luci-app-natmapt` + `luci-i18n-natmapt-zh-cn` | 5 个界面定制 + 中文 po（luci.mk 自动生成 lmo） |
 
-依赖 `+natmapt +coreutils-timeout`，均来自 OpenWrt 官方 feeds。
-
-## 相对上游的定制（界面侧 5 个文件）
-
-| 文件 | 作用 |
-| --- | --- |
-| `htdocs/.../view/natmap.js` | 全局 Reload → `resync`；行内 ↻ → `restart_instance` 并刷新；boot_delay 文案 |
-| `htdocs/.../view/natmap/log.js` | 日志查看/过滤/暂停/清空，stat 比对才重读，rpc 抖动不清屏 |
-| `htdocs/.../status/include/72_natmap.js` | Overview 表加「转发模式 / 转发目标 / 转发目标端口」三列 |
-| `root/.../menu.d/luci-app-natmap.json` | firstchild + config/log 两个标签 |
-| `root/.../rpcd/acl.d/luci-app-natmap.json` | 四条显式命令逐条放行 + 日志文件读写 |
-
-其余文件（ucode 后端、natcheck.sh、所有 po）与上游 `1b023f9` 完全一致。
-po 已覆盖状态页新增词条，无需改动。`SHA256SUMS.custom` 含界面侧 5 个定制文件校验值。
+依赖 `curl/jsonfilter/bash/coreutils-timeout` 全在 OpenWrt 官方 feeds，无需三方源。
+Telegram 加固通知脚本随核心包安装（上游把它拆成独立包，这里提升进核心，避免漏装后通知静默失败）。
 
 ## 编译
 
 ```sh
+make package/natmapt/compile -j$(nproc)
 make package/luci-app-natmapt/compile -j$(nproc)
 ```
 
-或 Single Plugin workflow：`plugin_subdir=new/luci-app-natmapt`，`package_name` 留空。
+CI 自动把 `new/*` 复制到 `openwrt/package/custom_repos/`，两个子包各自被扫描。
+Single Plugin workflow：`plugin_subdir=new/luci-app-natmapt/natmapt` 或
+`new/luci-app-natmapt/luci-app-natmap`。
+
+## 与现有设备部署的关系
+
+设备上由 `/root/other/natmap/install.sh` 覆盖 apk 包文件来维持定制。改用本包后：
+定制已固化在包里，不再需要每次 `apk upgrade` 后重跑 `install.sh`。
+UCI 配置 `/etc/config/natmap` 是 conffiles，刷机保留，通知 token 等不会丢。
+
+## 来源
+
+- 核心：[muink/openwrt-natmapt](https://github.com/muink/openwrt-natmapt) `7ee3bcb`（MIT）
+- 界面：[muink/luci-app-natmapt](https://github.com/muink/luci-app-natmapt) `1b023f9`（Apache-2.0）
+- 二进制：[heiher/natmap](https://github.com/heiher/natmap) `20261109`（MIT）
