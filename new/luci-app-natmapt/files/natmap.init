@@ -1,0 +1,857 @@
+#!/bin/bash /etc/rc.common
+
+. "${IPKG_INSTROOT}/lib/functions/network.sh"
+
+START=97
+STOP=90
+USE_PROCD=1
+EXTRA_COMMANDS="wan_refresh resync restart_all restart_instance"
+
+# natmap
+[ -x "$(command -v  nft)" ] && FW='fw4' || FW='fw3'
+NAME=natmap
+GLOBALSECTION=global
+NATMAPSECTION=natmap
+PROG=/usr/bin/$NAME
+
+STATUS_PATH=/var/run/natmap
+
+# Dedicated log on tmpfs. The natmap process AND every callback script write
+# here instead of syslog; the LuCI "NATMap / Log" tab reads this file.
+LOG_FILE=/var/log/natmap.log
+LOG_MAX_BYTES=2097152
+LOG_KEEP_LINES=1000
+
+# Write an init-side operational line to the dedicated log.
+# procd triggers and the boot-time wait run OUTSIDE the natmap instance's
+# PATH (which is where the `logger` shim lives). A bare `logger` here
+# resolves to busybox /usr/bin/logger and lands in syslog instead.
+# Keep the same "[timestamp] [tag] message" shape as the shim so the LuCI
+# Log view renders these lines identically.
+natmap_log() {
+        local dir
+        dir="$(dirname "$LOG_FILE")"
+        [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || return 0
+        printf '[%s] [natmap] %s\n' \
+                "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE" 2>/dev/null
+}
+
+config_load "$NAME"
+
+# Upstream used boot_delay as a conditional sleep when no default WAN was
+# detected. wait_for_interfaces() replaced that path, so the option now sets
+# the boot wait budget instead; NATMAP_BOOT_TIMEOUT still overrides it.
+# Unset, non-numeric or 0 all mean "use the default": 0 used to mean "do not
+# delay", and under the new meaning it would mean "do not wait at all", which
+# is exactly the boot race this wait exists to avoid.
+BOOT_TIMEOUT=${NATMAP_BOOT_TIMEOUT:-$(uci -q get "$NAME.@$GLOBALSECTION[0].boot_delay" 2>/dev/null)}
+case "$BOOT_TIMEOUT" in
+        ''|*[!0-9]*|0) BOOT_TIMEOUT=60 ;;
+esac
+BOOT_EAGER_TIMEOUT=${NATMAP_BOOT_EAGER_TIMEOUT:-15}
+BOOT_POLL_INTERVAL=1
+
+# define global var: DEF_WAN DEF_WAN6 NIC_* NIC6_*
+define_nic() {
+        local dev sub addr
+        # get all active NICs
+        for dev in $(ls /sys/class/net/); do
+                #ipv4
+                sub=$(ip -o -4 addr|sed -En "s|.*${dev}\s+inet\s+([0-9\./]+).*|\1|gp")
+                eval "NIC_${dev//[[:punct:]]/_}=\"\$sub\""
+                #ipv6
+                sub=$(ip -o -6 addr|sed -En "s|.*${dev}\s+inet6\s+([A-Za-z0-9\./:]+).*|\1|gp")
+                # ref: https://github.com/openwrt/openwrt/blob/main/package/base-files/files/lib/functions/network.sh#L53 #network_get_subnet6()
+                for _ in $sub; do
+                        for addr in $sub; do
+                                case "$addr" in fe[8ab]?:*|f[cd]??:*)
+                                        continue
+                                esac
+                                sub=$addr; break
+                        done
+                        # Attempt to return first non-fe80::/10 range
+                        for addr in $sub; do
+                                case "$addr" in fe[8ab]?:*)
+                                        continue
+                                esac
+                                sub=$addr; break
+                        done
+                        # Return first item
+                        for addr in $sub; do
+                                sub=$addr; break
+                        done
+                done
+                eval "NIC6_${dev//[[:punct:]]/_}=\"\$sub\""
+        done
+        # get default gateway 0.0.0.0/::
+        network_find_wan DEF_WAN true
+        network_find_wan6 DEF_WAN6 true
+
+        return 0
+}
+define_nic
+
+# define global var: GLOBAL_*
+define_global() {
+        [ "$2" == "0" ] || { >&2 echo "$(basename $0): section $1 validation failed"; return 1; }
+
+        local error=0
+        local v ucivv="enable def_tcp_stun def_udp_stun def_http_server def_fwmark_value def_tcp_interval def_udp_interval def_udp_stun_cycle"
+        for v in $ucivv; do
+                [ -z "$(config_get $1 $v)" ] && grep -qEv "^(def_fwmark_value)$" <<< "$v" && {
+                        err_msg__empty $1 $v
+                        let error++
+                }
+                eval "GLOBAL_$v=\$$v"
+        done
+
+        [ "$error" -gt 0 ] && return 1 || return 0
+}
+
+validate_section_global() {
+        uci_load_validate "$NAME" "$GLOBALSECTION" "$1" "$2" \
+                'enable:bool:0' \
+                'def_tcp_stun:string' \
+                'def_udp_stun:string' \
+                'def_http_server:string' \
+                'def_fwmark_value:string' \
+                'def_tcp_interval:and(uinteger, min(1)):30' \
+                'def_udp_interval:and(uinteger, min(1)):15' \
+                'def_udp_stun_cycle:uinteger:5' \
+                'test_port:and(port, min(1))'
+}
+
+validate_section_natmap() {
+        uci_load_validate "$NAME" "$NATMAPSECTION" "$1" "$2" \
+                'enable:bool:0' \
+                'interval:and(uinteger, min(1))' \
+                'stun_cycle:uinteger' \
+                'stun_server:string' \
+                'http_server:string' \
+                'fwmark_value:string' \
+                'comment:string' \
+                'udp_mode:bool:0' \
+                'family:or("ipv4", "ipv6"):ipv4' \
+                'bind_ifname:network' \
+                'port:or(port, portrange)' \
+                'port_pointer:bool:0' \
+                'forward:bool:0' \
+                'forward_mode:or("dnat", "via"):via' \
+                'natloopback:bool:1' \
+                'forward_congestion:string' \
+                'forward_timeout:and(uinteger, min(1))' \
+                'forward_target:or(hostname,ipaddr(1))' \
+                'forward_port:port' \
+                'refresh:bool:0' \
+                'clt_script:file' \
+                'clt_scheme:or("http", "https"):http' \
+                'clt_web_port:and(port, min(1))' \
+                'clt_username:string' \
+                'clt_password:string' \
+                'notify_enable:bool:0' \
+                'notify_script:file' \
+                'notify_tokens:list(string)' \
+                'notify_custom_domain:hostname' \
+                'notify_text:string' \
+                'ddns_enable:bool:0' \
+                'ddns_script:file' \
+                'ddns_tokens:list(string)' \
+                'ddns_a:hostname' \
+                'ddns_aaaa:hostname' \
+                'ddns_txt:hostname' \
+                'ddns_txt_content:string' \
+                'ddns_srv:hostname' \
+                'ddns_srv_serv:string' \
+                'ddns_srv_proto:string:tcp' \
+                'ddns_srv_target:hostname' \
+                'ddns_srv_priority:range(0, 65535):0' \
+                'ddns_srv_weight:range(0, 65535):65535' \
+                'ddns_https:hostname' \
+                'ddns_https_target:or(".", hostname):.' \
+                'ddns_https_svcparams:string:alpn="h2,http/1.1"' \
+                'ddns_https_priority:range(1, 65535):1' \
+                'custom_script:file' \
+                'log_stdout:bool:1' \
+                'log_stderr:bool:1'
+}
+
+# ip_match <hostname>
+hostname_match() {
+        [ "$#" -ge 1 ] || return 1
+        local _hostname="$1"
+
+        echo "$_hostname" | grep -E "^[[:alnum:]][-[:alnum:]]{0,62}(\.[[:alnum:]][-[:alnum:]]{0,62})*\.?$"
+}
+
+# ip_match <family> <ipaddr>
+ip_match() {
+        [ "$#" -ge 2 ] || return 1
+        local _family="$1"
+        local _ip="$2"
+
+        case "$_family" in
+                ipv4)
+                        echo "$_ip" | grep -E "^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$"
+                ;;
+                ipv6)
+                        echo "$_ip" | grep -E "^(([[:xdigit:]]{1,4}:){7}[[:xdigit:]]{1,4}|([[:xdigit:]]{1,4}:){1,7}:|([[:xdigit:]]{1,4}:){1,6}:[[:xdigit:]]{1,4}|([[:xdigit:]]{1,4}:){1,5}(:[[:xdigit:]]{1,4}){1,2}|([[:xdigit:]]{1,4}:){1,4}(:[[:xdigit:]]{1,4}){1,3}|([[:xdigit:]]{1,4}:){1,3}(:[[:xdigit:]]{1,4}){1,4}|([[:xdigit:]]{1,4}:){1,2}(:[[:xdigit:]]{1,4}){1,5}|[[:xdigit:]]{1,4}:(:[[:xdigit:]]{1,4}){1,6}|:((:[[:xdigit:]]{1,4}){1,7}|:)|\
+fe80:(:[[:xdigit:]]{0,4}){0,4}%\w+|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)|([[:xdigit:]]{1,4}:){1,4}:((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?))$"
+                ;;
+        esac
+}
+
+# fwmark_match <fwmark>
+fwmark_match() {
+        echo "$1" | grep -E '^(0|0x[[:xdigit:]]+|[1-9][0-9]*|0[0-7]+)$'
+}
+
+natmap_instance() {
+
+        # A dynamic forward port (forward_port=0) is only known at runtime:
+        # update.sh exports PUBPORT when it re-submits that instance. A plain
+        # resync (e.g. after a WAN redial) carries no PUBPORT, so dest_port
+        # would fall back to 0 -- procd then sees a changed definition and
+        # restarts the instance, which is exactly what a stable redial must
+        # avoid. Recover the last public port from this section's live status
+        # file so the re-submitted definition stays identical.
+        if [ "$forward" = 1 -a "$forward_mode" = "dnat" -a "$forward_port" = 0 -a -z "$PUBPORT" ]; then
+                local _sf _sp
+                for _sf in "$STATUS_PATH"/*.json; do
+                        [ -f "$_sf" ] || continue
+                        [ "$(jsonfilter -q -i "$_sf" -e '@.sid' 2>/dev/null)" = "$1" ] || continue
+                        _sp="${_sf##*/}"; _sp="${_sp%.json}"
+                        [ -r "/proc/$_sp/comm" ] && \
+                                [ "$(cat "/proc/$_sp/comm" 2>/dev/null)" = "natmap" ] || continue
+                        PUBPORT="$(jsonfilter -q -i "$_sf" -e '@.port' 2>/dev/null)"
+                        [ -n "$PUBPORT" ] && break
+                done
+        fi
+
+        procd_open_instance "$1"
+        # Wrap the command so ALL output (natmap's own stderr on link flaps,
+        # plus every -e callback script) goes to the dedicated log instead
+        # of syslog. Positional parameters pass the original argv through
+        # untouched -- no shell quoting of individual options is needed, and
+        # exec keeps the PID so update.sh's $PPID.json still resolves.
+        # The PATH prefix exposes the `logger` shim to callback scripts.
+        # PATH is spelled out instead of appending "$PATH": this string is part
+        # of the procd definition, so an inherited PATH would leak the caller's
+        # environment into it. update.sh re-submits this very instance from a
+        # callback whose PATH already carries the shim prefix, which used to add
+        # one more prefix to the definition on every dynamic-port change.
+        procd_set_param command /bin/sh -c \
+                "export PATH='/usr/lib/natmap/bin:/usr/sbin:/usr/bin:/sbin:/bin'; F=/var/run/natmap/.log.\$\$; rm -f \$F; mkfifo \$F || exec \"\$@\" >> '$LOG_FILE' 2>&1; ( awk '{ printf \"[%s] %s\\n\", strftime(\"%Y-%m-%d %H:%M:%S\"), \$0 }' < \$F >> '$LOG_FILE'; rm -f \$F ) & exec \"\$@\" > \$F 2>&1" \
+                natmap-exec "$PROG" \
+                ${interval:+-k "$interval"} \
+                ${stun_cycle:+-c "$stun_cycle"} \
+                ${stun_server:+-s "$stun_server"} \
+                ${http_server:+-h "$http_server"} \
+                ${fwmark_value:+-f "$fwmark_value"} \
+                ${port:+-b "$([ "$port_pointer" = 1 ] && echo ${port/-/\~} || echo $port)"} \
+
+        [ "${family}" = ipv4 ] && procd_append_param command -4
+        [ "${family}" = ipv6 ] && procd_append_param command -6
+        [ "${udp_mode}" = 1 ] && procd_append_param command -u
+
+        # Watch ONLY the bound WAN device, never br-lan. procd restarts an
+        # instance when a bound netdev's ifindex changes (e.g. PPPoE redial);
+        # binding br-lan made a LAN bridge rebuild restart ALL instances.
+        # procd_append_param falls back to procd_set_param when the netdev
+        # array does not exist yet, so no explicit procd_set_param is needed.
+        [ -n "${bind_ifname}" ] && {
+                procd_append_param command -i "$bind_ifname"
+                procd_append_param netdev "$bind_ifname"
+        } || {
+                local ifname
+                network_get_device ifname "$DEF_WAN" && procd_append_param netdev "$ifname"
+                network_get_device ifname "$DEF_WAN6" && procd_append_param netdev "$ifname"
+        }
+
+        if [ "$forward" = 1 -a "$forward_mode" = "via" -a -n "${forward_target}" ]; then
+                procd_append_param command ${forward_congestion:+-C "$forward_congestion"} ${forward_timeout:+-T "$forward_timeout"} -t "$forward_target" -p "$forward_port"
+        fi
+
+        procd_set_param env "SECTIONID=$1"
+        procd_append_param env "COMMENT=$comment"
+        if [ "$forward" = 1 ]; then
+                # Rewrite the dest_port(forward port) using a public port
+                [ "$forward_port" = 0 -a "$forward_mode" = "dnat" ] && procd_append_param env "RWFW=1"
+
+                if [ "$refresh" = 1 ]; then
+                        procd_append_param env "REFRESH=$clt_script"
+                        json_init
+                        json_add_string scheme "$clt_scheme"
+                        json_add_int web_port "$clt_web_port"
+                        json_add_string username "$clt_username"
+                        json_add_string password "$clt_password"
+                        json_add_string host "$forward_target"
+                        procd_append_param env "REFRESH_PARAM=$(json_dump)"
+                fi
+        fi
+
+        if [ "$notify_enable" = 1 ]; then
+                procd_append_param env "NOTIFY=$notify_script"
+                json_init
+                json_add_string custom_domain "$notify_custom_domain"
+                json_add_string text "$notify_text"
+                json_add_string tokens "$notify_tokens"
+                procd_append_param env "NOTIFY_PARAM=$(json_dump)"
+        fi
+
+        if [ "$ddns_enable" = 1 ]; then
+                procd_append_param env "DDNS=$ddns_script"
+                json_init
+                json_add_string tokens "$ddns_tokens"
+                [ "$family" = ipv4 ] && json_add_string hostype "A" && json_add_string host "$ddns_a"
+                [ "$family" = ipv6 ] && json_add_string hostype "AAAA" && json_add_string host "$ddns_aaaa"
+                [ -n "$ddns_txt" ] && {
+                        json_add_string txt "$ddns_txt"
+                        json_add_string txt_content "$ddns_txt_content"
+                }
+                [ -n "$ddns_srv" ] && {
+                        json_add_string srv "$ddns_srv"
+                        json_add_string srv_serv "$ddns_srv_serv"
+                        json_add_string srv_proto "$ddns_srv_proto"
+                        json_add_string srv_target "$ddns_srv_target"
+                        json_add_int srv_priority "$ddns_srv_priority"
+                        json_add_int srv_weight "$ddns_srv_weight"
+                }
+                [ -n "$ddns_https" ] && {
+                        json_add_string https "$ddns_https"
+                        json_add_string https_target "$ddns_https_target"
+                        json_add_string https_svcparams "$ddns_https_svcparams"
+                        json_add_int https_priority "$ddns_https_priority"
+                }
+                procd_append_param env "DDNS_PARAM=$(json_dump)"
+        fi
+
+        [ -n "${custom_script}" ] && procd_append_param env "CUSTOM_SCRIPT=${custom_script}"
+        procd_append_param command -e /usr/lib/natmap/update.sh
+
+        # retry=0 -> never give up. The default (5 tries per hour) leaves a
+        # crashed instance down until something re-submits the definition;
+        # a WAN that comes back hours later must not need a manual restart.
+        procd_set_param respawn 3600 5 0
+        procd_set_param stdout "$log_stdout"
+        procd_set_param stderr "$log_stderr"
+
+        procd_open_data
+        # configure firewall
+        json_add_array firewall
+                if [ "$forward" = 1 -a "$forward_mode" = "dnat" ]; then
+                        # fw4 resolves the zone name from the device. An empty
+                        # result means bind_ifname belongs to no zone at all; the
+                        # redirect would then carry no `src` and match traffic
+                        # from EVERY zone. Skip the rule loudly instead.
+                        local _fw_src
+                        _fw_src="$($FW -q device "$bind_ifname" 2>/dev/null)"
+                        if [ -z "$_fw_src" ]; then
+                                natmap_log "section $1: bind_ifname '$bind_ifname' not in any firewall zone, DNAT rule skipped"
+                        else
+                        json_add_object ''
+                        json_add_string type redirect
+                        json_add_string target DNAT
+                        json_add_string name "$1"
+                        json_add_string family "$family"
+                        json_add_string proto "$proto"
+                        json_add_string src "$_fw_src"
+                        #json_add_string src_dip "$bind_ip" # fix for #11 (The external address of the firewall will not be updated), fw4 cannot add `iifname` rule in `<action>_<fw zone>` chain
+                        json_add_string src_dport "$port"
+                        #json_add_string dest '' # zlan or zwan
+                        json_add_string dest_ip "$forward_target"
+                        [ -n "$PUBPORT" ] \
+                        && json_add_string dest_port "$PUBPORT" && unset PUBPORT \
+                        || json_add_string dest_port "$forward_port"
+                        json_add_boolean reflection $natloopback
+                        json_close_object
+                        fi
+                fi
+                if [ "$forward" = 1 -a "$forward_mode" = "via" -o "$forward" = 0 ]; then
+                        json_add_object ''
+                        json_add_string type rule
+                        json_add_string target ACCEPT
+                        json_add_string name "$1"
+                        json_add_string family "$family"
+                        json_add_string proto "$proto"
+                        json_add_string direction in
+                        json_add_string src "$($FW -q device $bind_ifname)"
+                        #json_add_string dest '' # '' = input
+                        #json_add_string dest_ip "$bind_ip" # fix for #11 (The external address of the firewall will not be updated), fw4 cannot add `iifname` rule in `<action>_<fw zone>` chain
+                        json_add_string dest_port "$port"
+                        json_close_object
+                fi
+        json_close_array
+        procd_close_data
+
+        procd_close_instance
+}
+
+# --- WAN change detection ---------------------------------------------
+# Fingerprint every bind_ifname of an ENABLED section that currently has an
+# IPv4 address. Devices without an address are omitted on purpose: an ifdown
+# event then produces a SHORTER fingerprint, which wan_refresh ignores
+# instead of re-submitting a service definition with an empty bind_ip.
+#
+# An enabled section WITHOUT bind_ifname binds whatever the default WAN
+# resolves to, so that device has to be part of the fingerprint too --
+# otherwise its address changes would never trigger a refresh. _collect_
+# required_ifaces() counts those sections in $UNPINNED and the default WAN
+# devices are merged in below.
+#
+# The list is sorted so the fingerprint does not depend on the order the
+# sections happen to appear in /etc/config/natmap.
+wan_fingerprint() {
+        local dev idx addr devs
+
+        REQUIRED_IFACES=""
+        UNPINNED=0
+        config_foreach _collect_required_ifaces "$NATMAPSECTION"
+
+        if [ "$UNPINNED" -gt 0 ]; then
+                local wan_dev wan6_dev
+                [ -n "$DEF_WAN" ] && network_get_device wan_dev "$DEF_WAN" 2>/dev/null
+                [ -n "$DEF_WAN6" ] && network_get_device wan6_dev "$DEF_WAN6" 2>/dev/null
+                REQUIRED_IFACES="$REQUIRED_IFACES $wan_dev $wan6_dev"
+        fi
+
+        devs="$(printf '%s\n' $REQUIRED_IFACES | sed '/^$/d' | sort -u)"
+
+        for dev in $devs; do
+                [ -d "/sys/class/net/$dev" ] || continue
+                addr=$(ip -o -4 addr show dev "$dev" 2>/dev/null | \
+                        awk '{print $4}' | cut -d/ -f1 | tr '\n' ',')
+                [ -n "$addr" ] || continue
+                idx=$(cat "/sys/class/net/$dev/ifindex" 2>/dev/null)
+                printf '%s=%s:%s\n' "$dev" "$idx" "$addr"
+        done
+}
+
+# Called by a procd 'interface.*' trigger. Only a real WAN address/ifindex
+# change may re-submit the service definition; adding a route or a policy
+# rule leaves the fingerprint untouched and is a complete no-op.
+wan_refresh() {
+        local now old fp="${STATUS_PATH}/.wan_fp"
+
+        # At boot the service is still inside start_service()'s wait loop and
+        # has not seeded .wan_fp yet. An interface event arriving then would
+        # see an empty fingerprint, take the "first WAN fingerprint" branch and
+        # re-enter start_service() through reload(). Wait until the first start
+        # has finished; after that the empty-fingerprint branch is exactly the
+        # self-heal path it was written for.
+        [ -f /tmp/.natmap_booted ] || return 0
+
+        mkdir -p "$STATUS_PATH" 2>/dev/null
+        now="$(wan_fingerprint)"
+        [ -z "$now" ] && return 0
+
+        old="$(cat "$fp" 2>/dev/null)"
+        if [ -z "$old" ]; then
+                # No usable fingerprint yet. This happens after a boot where
+                # every WAN stayed down past BOOT_TIMEOUT: start_service()
+                # seeded an empty file, instances then burned their respawn
+                # budget and procd stopped them. This event is the first real
+                # WAN state, so re-submit the definition to bring them back.
+                printf '%s' "$now" > "$fp"
+                natmap_log "first WAN fingerprint after boot, resyncing service"
+                reload
+                return 0
+        fi
+        [ "$now" = "$old" ] && return 0
+
+        # A device disappeared (ifdown). Reloading now would make
+        # launcher() fail on an empty bind_ip and procd would stop the
+        # affected instances. Wait for the ifup event instead.
+        [ "$(printf '%s\n' "$now" | wc -l)" -lt \
+          "$(printf '%s\n' "$old" | wc -l)" ] && return 0
+
+        printf '%s' "$now" > "$fp"
+        natmap_log "WAN address/ifindex changed, refreshing firewall data"
+        reload
+}
+
+clear_status_files() {
+        local f pid sid="$1"
+
+        # Only reap status files whose owning natmap process has exited.
+        # procd can keep an instance running across a reload when its command
+        # is unchanged, and update.sh only fires when the public IP/port
+        # changes; a blanket wipe here leaves stable instances with no way to
+        # rebuild their status file, so LuCI shows "none" forever.
+        mkdir -p "${STATUS_PATH}" 2>/dev/null
+        pushd "${STATUS_PATH}" >/dev/null
+        for f in *.json; do
+                [ -f "$f" ] || continue
+                pid="${f%.json}"
+                case "$pid" in
+                        ''|*[!0-9]*) continue ;;
+                esac
+                # A live NATMAP instance owns its status file. Check the
+                # process identity, not just PID existence: a recycled PID
+                # would otherwise keep an orphan alive forever.
+                [ -r "/proc/$pid/comm" ] && \
+                        [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = "natmap" ] && continue
+                if [ -n "$sid" ]; then
+                        [ "$(jsonfilter -q -i "$f" -e '@.sid' 2>/dev/null)" = "$sid" ] || continue
+                fi
+                rm -f -- "$f"
+        done
+        popd >/dev/null
+}
+
+# Reap status files whose section no longer exists in the config. procd removes
+# such an instance on the next `service set`, but nothing ever overwrites its
+# status file afterwards -- so clear_status_files()'s liveness check would keep
+# the file forever.
+_collect_configured_sids() {
+        CONFIGURED_SIDS="$CONFIGURED_SIDS $1"
+}
+
+reap_removed_sections() {
+        local f pid fsid
+
+        CONFIGURED_SIDS=""
+        config_foreach _collect_configured_sids "$NATMAPSECTION"
+        [ -n "$CONFIGURED_SIDS" ] || return 0
+
+        mkdir -p "$STATUS_PATH" 2>/dev/null
+        pushd "$STATUS_PATH" >/dev/null
+        for f in *.json; do
+                [ -f "$f" ] || continue
+                pid="${f%.json}"
+                case "$pid" in ''|*[!0-9]*) continue ;; esac
+                fsid="$(jsonfilter -q -i "$f" -e '@.sid' 2>/dev/null)"
+                case " $CONFIGURED_SIDS " in
+                        *" $fsid "*) ;;
+                        *) rm -f -- "$f" ;;
+                esac
+        done
+        popd >/dev/null
+}
+
+# err_msg__empty <section> <option>
+err_msg__empty() {
+        >&2 echo "$(basename $0): section $1 option $2 cannot be empty"
+}
+
+launcher() {
+        [ "$2" = 0 ] || { >&2 echo "$(basename $0): section $1 validation failed"; return 1; }
+        [ "$enable" = 0 ] && return 0
+
+        # global options
+        if [ "$udp_mode" = 1 ]; then
+                local interval=${interval:-$GLOBAL_def_udp_interval} \
+                        stun_cycle=${stun_cycle:-$GLOBAL_def_udp_stun_cycle} \
+                        stun_server=${stun_server:-$GLOBAL_def_udp_stun} \
+                        http_server='' \
+                ;
+        else
+                local interval=${interval:-$GLOBAL_def_tcp_interval} \
+                        stun_cycle='' \
+                        stun_server=${stun_server:-$GLOBAL_def_tcp_stun} \
+                        http_server=${http_server:-$GLOBAL_def_http_server} \
+                ;
+        fi
+        local fwmark_value=${fwmark_value:-$GLOBAL_def_fwmark_value}
+        # natmap options
+        local error=0
+        local proto ifname bind_ip lan_addr
+        [ "$udp_mode" = 1 ] && proto=udp || proto=tcp
+        case "$family" in
+                ipv4) network_get_device ifname "$DEF_WAN";;
+                ipv6) network_get_device ifname "$DEF_WAN6";;
+        esac
+        local bind_ifname=${bind_ifname:-$ifname}
+        [ -z "$bind_ifname" ] && >&2 echo "$(basename $0): section $1 option bind_ifname parsing failed, there may be no $family network connection" && let error++
+        case "$family" in
+                ipv4)
+                        eval "bind_ip=\"\${NIC_${bind_ifname//[[:punct:]]/_}%/*}\""
+                        lan_addr="${NIC_br_lan%/*}"
+                ;;
+                ipv6)
+                        eval "bind_ip=\"\${NIC6_${bind_ifname//[[:punct:]]/_}%/*}\""
+                        lan_addr="${NIC6_br_lan%/*}"
+                ;;
+        esac
+        [ -z "$bind_ip" ] && >&2 echo "$(basename $0): section $1 option bind_ip parsing failed, there may be no $family network connection" && let error++
+        [ -z "$port" ] && err_msg__empty $1 port && let error++
+        grep -qE '^([1-9]\d*)(-([1-9]\d*))?$' <<< "$port" || { >&2 echo "$(basename $0): section $1 option port '$port' is invalid"; let error++; }
+        [ -z "$fwmark_value" -o -n "$(fwmark_match "$fwmark_value")" ] || { >&2 echo "$(basename $0): section $1 option fwmark_value '$fwmark_value' is invalid"; let error++; }
+        ## forward
+        if   [ "$forward" = 1 ]; then
+                [ "$forward_mode" = "dnat" -a "$family" = "ipv6" ] && >&2 echo "$(basename $0): section $1 option forward_mode 'dnat' not support under IPv6" && let error++
+                [ "$forward_mode" != "dnat" ] && natloopback=0
+                if [ -n "$forward_target" ]; then
+                        if [ -n "$(hostname_match "$forward_target")" -a -z "$(ip_match ipv4 "$forward_target")" ]; then
+                                # hostname
+                                [ "$forward_mode" = "dnat" ] && >&2 echo "$(basename $0): section $1 option forward_target '$forward_target', hostname not support under DNAT mode" && let error++
+                        else
+                                # ipaddr(1)
+                                [ -n "$(grep -E "^127(\.\d+){3}" <<< $forward_target)" -o "$forward_target" = "::1" ] && forward_target="$lan_addr"
+                                [ -n "$(grep -E "^0(\.\d+){3}"   <<< $forward_target)" -o "$forward_target" = "::" ] && forward_target="$bind_ip"
+                                if [ -n "$forward_target" ]; then
+                                        [ -z "$(ip_match "$family" "$forward_target")" ] && >&2 echo "$(basename $0): section $1 option forward_target '$forward_target' not a $family address" && let error++
+                                else
+                                        >&2 echo "$(basename $0): section $1 option forward_target parsing failed, there may be no $family network connection"; let error++
+                                fi
+                        fi
+                else
+                        err_msg__empty $1 forward_target; let error++
+                fi
+                [ -z "$forward_port" ] && err_msg__empty $1 forward_port && let error++
+        elif [ "$forward" = 0 ]; then
+                natloopback=0
+                unset forward_target forward_port
+        fi
+        ## refresh
+        if [ "$refresh" = 1 ]; then
+                [ -x "$clt_script" ] || { >&2 echo "$(basename $0): section $1 option clt_script '$clt_script' is empty or non-executable"; let error++; }
+                [ -z "$clt_web_port" ] && err_msg__empty $1 clt_web_port && let error++
+        fi
+        ## notify
+        if [ "$notify_enable" = 1 ]; then
+                [ -x "$notify_script" ] || { >&2 echo "$(basename $0): section $1 option notify_script '$notify_script' is empty or non-executable"; let error++; }
+        fi
+        ## ddns
+        if [ "$ddns_enable" = 1 ]; then
+                [ -x "$ddns_script" ] || { >&2 echo "$(basename $0): section $1 option ddns_script '$ddns_script' is empty or non-executable"; let error++; }
+                if [ -n "$ddns_srv" ]; then
+                        [ -z "$ddns_srv_serv" ] && err_msg__empty $1 ddns_srv_serv && let error++
+                        local ddns_srv_target=${ddns_srv_target:-$ddns_srv}
+                fi
+        fi
+
+        # review
+        [ -n "$NATMAP_DEBUG" ] && {
+                local v ucivv="enable interval stun_cycle stun_server http_server fwmark_value comment udp_mode proto family bind_ifname ifname bind_ip lan_addr port port_pointer forward forward_mode natloopback forward_congestion forward_timeout forward_target forward_port refresh clt_script clt_scheme clt_web_port clt_username clt_password notify_enable notify_script notify_tokens notify_custom_domain notify_text ddns_enable ddns_script ddns_tokens ddns_a ddns_aaaa ddns_txt ddns_txt_content ddns_srv ddns_srv_serv ddns_srv_proto ddns_srv_target ddns_srv_priority ddns_srv_weight ddns_https ddns_https_target ddns_https_svcparams ddns_https_priority custom_script"
+                for v in $ucivv; do eval "echo $1 $v=\'\$$v\'"; done # ash not support ${!v}
+        }
+        [ "$error" -gt 0 ] && return 1
+
+        natmap_instance "$1"
+}
+
+service_triggers() {
+        # Only natmap's own UCI changes reload unconditionally. Upstream also
+        # watched the 'network' package and every interface, so adding a route
+        # restarted all instances and re-ran notify/ddns/custom scripts.
+        # Interface events still matter, for two reasons: procd only compares
+        # the bound netdev's ifindex when a definition is re-submitted, and
+        # forward_target=0.0.0.0 is resolved to bind_ip while the definition is
+        # built. The fw4 DNAT rule itself carries the zone name, not bind_ip
+        # (see the commented-out src_dip in natmap_instance). wan_refresh
+        # reloads only when the WAN ifindex/IPv4 actually changed.
+        # (procd's 'netdev' is not an event subscription.)
+        procd_add_reload_trigger "$NAME"
+        procd_add_raw_trigger "interface.*" 1000 /etc/init.d/natmap wan_refresh
+
+        procd_add_validation validate_section_natmap
+}
+
+# --- collect required bind_ifname targets from config ---
+_collect_required_ifaces() {
+        local iface enable
+        config_get iface "$1" bind_ifname
+        config_get enable "$1" enable 0
+        [ "$enable" = "1" ] || return 0
+        if [ -n "$iface" ]; then
+                # deduplicate
+                case " $REQUIRED_IFACES " in
+                        *" $iface "*) ;;
+                        *) REQUIRED_IFACES="$REQUIRED_IFACES $iface" ;;
+                esac
+        else
+                # Enabled but no bind_ifname: this section binds whatever the
+                # default WAN resolves to. Counted so wan_fingerprint() knows
+                # to merge that device in.
+                UNPINNED=$((UNPINNED + 1))
+        fi
+}
+
+# --- wait until at least one required interface has an IPv4 address ---
+# If all required interfaces are up, returns immediately.
+# Otherwise waits up to BOOT_TIMEOUT seconds.
+# NATMAP_BOOT_TIMEOUT and NATMAP_BOOT_EAGER_TIMEOUT can be set in
+# /etc/environment or /etc/rc.local to tune without editing this file.
+wait_for_interfaces() {
+        local family="${1:-ipv4}"
+        local timeout="$BOOT_TIMEOUT"
+        local eager="$BOOT_EAGER_TIMEOUT"
+        local waited=0
+
+        # Build target interface list from natmap config
+        REQUIRED_IFACES=""
+        config_foreach _collect_required_ifaces "$NATMAPSECTION"
+
+        # Fallback: if no explicit bind_ifname, use default WAN devices
+        if [ -z "$REQUIRED_IFACES" ]; then
+                local wan_dev wan6_dev
+                network_get_device wan_dev "$DEF_WAN" 2>/dev/null
+                network_get_device wan6_dev "$DEF_WAN6" 2>/dev/null
+                REQUIRED_IFACES=" $wan_dev $wan6_dev"
+        fi
+
+        local ifaces="$REQUIRED_IFACES"
+        [ -z "$(echo "$ifaces" | tr -d ' ')" ] && return 0  # nothing to wait for
+
+        natmap_log "Waiting for interfaces:$ifaces (${family})"
+
+        while [ "$waited" -lt "$timeout" ]; do
+                local ready=0 total=0
+
+                for iface in $ifaces; do
+                        [ -z "$iface" ] && continue
+                        total=$((total + 1))
+                        if [ "$family" = "ipv6" ]; then
+                                ip -6 addr show dev "$iface" 2>/dev/null \
+                                        | grep -qv 'scope link' && ready=$((ready + 1))
+                        else
+                                ip -4 addr show dev "$iface" 2>/dev/null \
+                                        | grep -q 'inet ' && ready=$((ready + 1))
+                        fi
+                done
+
+                # All interfaces ready
+                [ "$ready" -eq "$total" ] && [ "$total" -gt 0 ] && break
+
+                # Eager: at least one ready and past eager timeout
+                [ "$ready" -gt 0 ] && [ "$waited" -ge "$eager" ] && break
+
+                sleep "$BOOT_POLL_INTERVAL"
+                waited=$((waited + 1))
+        done
+
+        if [ "$waited" -gt 0 ]; then
+                local ready=0 total=0
+                for iface in $ifaces; do
+                        [ -z "$iface" ] && continue
+                        total=$((total + 1))
+                        if [ "$family" = "ipv6" ]; then
+                                ip -6 addr show dev "$iface" 2>/dev/null \
+                                        | grep -qv 'scope link' && ready=$((ready + 1))
+                        else
+                                ip -4 addr show dev "$iface" 2>/dev/null \
+                                        | grep -q 'inet ' && ready=$((ready + 1))
+                        fi
+                done
+                natmap_log "Waited ${waited}s for interfaces:$ifaces (ready=$ready/$total)"
+        fi
+}
+
+start_service() {
+        local sid="$1"
+
+        # Only wait during actual boot (procd coldplug), not on uci commit / reload
+        # /tmp/.natmap_booted is a one-shot marker: created after first successful start
+        if [ ! -f /tmp/.natmap_booted ]; then
+                wait_for_interfaces ipv4
+                # __network_ifstatus() caches the whole `network.interface dump`
+                # on first use and network_find_wan()/network_get_device() both
+                # go through it. Without this flush the re-probe below would
+                # still read the pre-WAN state cached at script load, leaving
+                # DEF_WAN empty. Upstream flushed here too.
+                network_flush_cache
+                # Re-probe all NICs now that interfaces should have addresses
+                define_nic
+                # Mark boot complete even when the service is disabled below, so
+                # a later reload does not repeat the (up to BOOT_TIMEOUT second)
+                # wait. /tmp is tmpfs, so a reboot clears it again.
+                touch /tmp/.natmap_booted 2>/dev/null
+        fi
+
+        config_foreach validate_section_global "$GLOBALSECTION" define_global || return $?
+        [ "${GLOBAL_enable:=0}" == "0" ] && return 0
+
+        if [ -n "$sid" ]; then
+                clear_status_files "$sid"
+                validate_section_natmap "$sid" launcher
+        else
+                clear_status_files
+                config_foreach validate_section_natmap "$NATMAPSECTION" launcher
+        fi
+
+        # A section deleted from the config leaves a status file that nothing
+        # will ever overwrite; reap it after the remaining instances have been
+        # (re)submitted.
+        [ -n "$sid" ] || reap_removed_sections
+
+        # Seed the WAN fingerprint so the first interface event after a
+        # boot/reload is not mistaken for an address change.
+        mkdir -p "$STATUS_PATH" 2>/dev/null
+        wan_fingerprint > "${STATUS_PATH}/.wan_fp" 2>/dev/null
+
+        # Heartbeat: natmap only writes when the public address/port changes, so
+        # without this the log stays empty for hours and looks broken.
+        natmap_log "start_service done: ${sid:-all instances}"
+
+        # Bound the dedicated log. Trim IN PLACE (preserve the inode) so the
+        # long-lived append fds opened by the -c wrapper keep writing to the
+        # same file. Same pattern as the shadowsocks-rust log_guard.
+        if [ -z "$sid" ]; then
+                mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
+                procd_open_instance "log_guard"
+                procd_set_param command /bin/sh -c "
+                        while true; do
+                                sleep 60
+                                [ -f '$LOG_FILE' ] || continue
+                                size=\$(wc -c < '$LOG_FILE' 2>/dev/null || echo 0)
+                                if [ \"\$size\" -gt $LOG_MAX_BYTES ]; then
+                                        tail -n $LOG_KEEP_LINES '$LOG_FILE' > '$LOG_FILE.tmp' 2>/dev/null &&
+                                        cat '$LOG_FILE.tmp' > '$LOG_FILE' 2>/dev/null
+                                        rm -f '$LOG_FILE.tmp'
+                                fi
+                        done
+                "
+                procd_set_param respawn 3600 5 0
+                procd_close_instance
+        fi
+}
+
+# Status files are reaped from service_stopped() below, not from
+# stop_service(): rc.common runs stop_service BEFORE procd_kill, so the
+# instance is still alive there and clear_status_files()'s comm check would
+# keep its file.
+
+# --- Explicit service actions -----------------------------------------
+# Public, self-describing commands. LuCI and scripts should call these
+# instead of relying on the shape of reload()'s arguments (no argument vs
+# one empty string), which a UCI hook or cron job can easily get wrong.
+resync() {
+        # Re-submit the service definition only. procd diffs command/env/
+        # data/netdev and restarts JUST the changed instances. Orphan status
+        # files are reaped by update.sh when the replacement instance writes
+        # its own status, so no "sleep and guess" cleanup is needed here.
+        start
+}
+
+restart_all() {
+        stop
+        start
+}
+
+restart_instance() {
+        [ -n "${1:-}" ] || return 1
+        stop "$1"
+        start "$1"
+}
+
+reload_service() {
+        local sid="${1:-}"
+
+        # Compatibility shim for the config.change trigger and older LuCI
+        # builds. New callers use the explicit commands above.
+        if [ -n "$sid" ]; then
+                restart_instance "$sid"
+        elif [ "$#" -eq 0 ]; then
+                resync
+        else
+                restart_all
+        fi
+}
+
+service_started() { procd_set_config_changed firewall; }
+
+# Runs AFTER procd_kill, i.e. when the instances are really gone.
+service_stopped() {
+        procd_set_config_changed firewall
+        clear_status_files
+}

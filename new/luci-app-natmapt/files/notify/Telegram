@@ -1,0 +1,160 @@
+#!/bin/bash
+# NATMap port-update notify script - Telegram Bot (hardened)
+#
+# 接口契约与 muink 官方 /etc/natmap/notify/Telegram 完全一致：
+#   update.sh 的 fallloop 传入一个 JSON 参数，含 custom_domain / text / tokens。
+#   故保留：. common.sh、ALL_PARAMS、JSON_EXPORT、INIT_GLOBAL_VAR、eval "$tokens"。
+#
+# 相对官方脚本的加固（移植自 hahaher123 定制版 plugin-notify/telegram_bot.sh）：
+#   1. 检查 HTTP 状态码：官方用 -o /dev/null 只看 curl 退出码，4xx/5xx 会被误判成功，
+#      fallloop 不再重试 -> 通知静默丢失。本版按状态码判断。
+#   2. HTML 转义：parse_mode=HTML 时正文的 & < > 不转义会被 Telegram 400 拒绝。
+#   3. jq 构造 payload：正文含引号/换行时不破坏 JSON。
+#   4. 429 按响应体 retry_after 退避；4xx 不重试；5xx/000(连接失败) 可重试。
+#
+# 重试策略：内部 3 次 / 3 秒（覆盖短时抖动）；外层 update.sh 已有 fallloop 5m 4 兜底，
+# 内部不再做长重试，避免与外层叠成十几次请求触发 Telegram 限流。
+
+# ---- 接口 → 运营商标签映射（要改线路标识只改这里）----
+# 变量名 = IFNAME_LABEL_<bind_ifname 中的非字母数字换成下划线>，值 = 通知里显示的标签
+# 例：bind_ifname=pppoe-wan → IFNAME_LABEL_pppoe_wan；新增接口照此格式加一行即可。
+# 接法对调时把下面两行的值互换。
+# 通知格式 [标签/接口名]：映射命中时如 [移动/pppoe-wan]；未命中时只有接口名如 [pppoe-ct]。
+IFNAME_LABEL_pppoe_wan='移动'
+IFNAME_LABEL_pppoe_usb='联通'
+
+. /usr/lib/natmap/common.sh
+
+# ---- 参数解析（设备契约，勿改）----
+ALL_PARAMS="custom_domain text tokens"
+eval "$(JSON_EXPORT "$1")"
+INIT_GLOBAL_VAR TOKEN CHAT_ID CUESTOM_PROXY
+eval "$tokens"
+
+log() {
+	# 走设备 logger shim，落到 /var/log/natmap.log（与 natmap 其他日志同处）
+	logger -t NATMAP-NOTIFY "$*" 2>/dev/null || \
+		echo "$(date '+%Y-%m-%d %H:%M:%S') [NATMAP-NOTIFY] $*" >>/var/log/natmap.log 2>/dev/null || true
+}
+
+# HTML 转义：parse_mode=HTML 时 & < > 必须转义，否则 Telegram 返回 400。
+html_escape() {
+	local s="$1"
+	# bash 5.2+ patsub_replacement 默认开启：${s//&/&amp;} 的 & 会被展开成
+	# "被匹配内容"，导致 &lt; -> <lt;。显式关掉；老 bash 无此选项时静默忽略，
+	# 而那时 & 本就是字面量，不影响结果。
+	shopt -u patsub_replacement 2>/dev/null
+	s="${s//&/&amp;}"
+	s="${s//</&lt;}"
+	s="${s//>/&gt;}"
+	printf '%s' "$s"
+}
+
+text="${text:-NATMap port update}"
+
+# ---- 线路标签（11-22 新增）----
+# 默认 text 只带 comment + 内网 IP，双 WAN 时看不出线路。本脚本是 natmap 的子进程，
+# 继承 SECTIONID / COMMENT 环境变量，据此反查 UCI 的 bind_ifname，再查顶部
+# IFNAME_LABEL_* 映射表得到运营商标签。取不到就保持原 text。只重排展示，
+# 不参与重试逻辑，也不改接口契约。
+_line_label() {
+	local sid="${SECTIONID:-}" cmt="${COMMENT:-}" ifname="" key="" label=""
+	# 1) 用 section id 精确反查绑定接口
+	if [ -n "$sid" ]; then
+		ifname="$(uci -q get "natmap.${sid}.bind_ifname" 2>/dev/null)"
+	fi
+	# 2) 退回：按 comment 名匹配 section 再取接口（sid 缺失时）
+	if [ -z "$ifname" -a -n "$cmt" ]; then
+		local sec c
+		for sec in $(uci show natmap 2>/dev/null | sed -n "s/^\(natmap\.[^.]*\)\.comment=.*/\1/p"); do
+			c="$(uci -q get "${sec}.comment" 2>/dev/null)"
+			[ "$c" = "$cmt" ] || continue
+			ifname="$(uci -q get "${sec}.bind_ifname" 2>/dev/null)"
+			[ -n "$ifname" ] && break
+		done
+	fi
+	# 3) 接口名始终显示；映射命中则补上标签 → [标签/接口名]
+	[ -z "$ifname" ] && return 0
+	key="IFNAME_LABEL_${ifname//[^A-Za-z0-9]/_}"   # 非字母数字换下划线，适配任意接口名
+	label="${!key:-}"   # bash 间接展开；未定义该变量时为空
+	if [ -n "$label" ]; then
+		printf '%s/%s' "$label" "$ifname"
+	else
+		printf '%s' "$ifname"
+	fi
+}
+_lbl="$(_line_label)"
+if [ -n "$_lbl" ] && case "$text" in "NATMap: "*) true ;; *) false ;; esac; then
+	text="NATMap [${_lbl}] ${text#NATMap: }"
+fi
+
+chat_id="$CHAT_ID"
+token="$TOKEN"
+base="${custom_domain:-api.telegram.org}"
+url="https://${base}/bot${token}/sendMessage"
+
+# jq 构造请求体，避免正文含引号/换行时破坏 JSON
+payload=$(jq -n --arg chat_id "$chat_id" \
+	--arg text "$(html_escape "$text")" \
+	'{chat_id: $chat_id, text: $text, parse_mode: "HTML", disable_notification: false}')
+
+# 代理：兼容官方脚本的拼写 CUESTOM_PROXY（typo）
+if [ -n "$CUESTOM_PROXY" ]; then
+	proxy_param=(-x "$CUESTOM_PROXY")
+else
+	proxy_param=()
+fi
+
+max_attempts=3
+sleep_time=3
+attempt=0
+while :; do
+	attempt=$((attempt + 1))
+
+	# -w '\n%{http_code}' 把响应体与状态码分开取；保留响应体便于失败时定位原因。
+	resp=$($CURL -4 -s -m 20 -w $'\n%{http_code}' -X POST \
+		-H 'Content-Type: application/json' \
+		-d "$payload" \
+		"${proxy_param[@]}" \
+		--url "$url" 2>&1)
+	rc=$?
+	status="${resp##*$'\n'}"
+	body="${resp%$'\n'*}"
+	detail="${body:0:200}"
+	[ -n "$detail" ] || detail="curl 退出码 ${rc}, 无响应体"
+
+	if [ "$status" = "200" ]; then
+		log "Telegram 发送成功(第 ${attempt} 次)"
+		exit 0
+	fi
+
+	case "$status" in
+	429)
+		# Telegram 限流：按响应体的 retry_after 等待，固定间隔往往还没到可发送时刻
+		retry_after=$(printf '%s' "$body" | jq -r '.parameters.retry_after // empty' 2>/dev/null)
+		case "$retry_after" in
+		'' | *[!0-9]*) wait_s="$sleep_time" ;;
+		*) wait_s=$((retry_after + 1)) ;;
+		esac
+		;;
+	4??)
+		# 其余 4xx 是请求本身的问题（token/chat_id/消息格式），重试不会成功
+		log "请求被拒绝(HTTP ${status}), 不再重试: ${detail}"
+		exit 1
+		;;
+	*)
+		# 5xx / 000(连接失败、DNS 未就绪、超时) —— 可重试
+		wait_s="$sleep_time"
+		;;
+	esac
+
+	[ "$wait_s" -gt 60 ] 2>/dev/null && wait_s=60
+
+	if [ "$attempt" -ge "$max_attempts" ]; then
+		log "达到最大尝试次数(${max_attempts}), 发送失败: HTTP ${status} ${detail}"
+		exit 1
+	fi
+
+	log "第 ${attempt} 次发送失败(HTTP ${status}), ${wait_s} 秒后重试: ${detail}"
+	sleep "$wait_s"
+done
