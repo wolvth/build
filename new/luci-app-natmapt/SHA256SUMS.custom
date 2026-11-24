@@ -1,0 +1,10 @@
+4c672c968ac752730d296104e6d318d823c7bb58e201234f2909863932607ee9 *natmapt/files/natmap.init
+5820d4837e77eb54da69e16f28a7137221e87bb37ff2ae3433f7cf8281e7945a *natmapt/files/natmap-update.sh
+2128050a52c8fce10540f9385ac82e88dd00efe9efe8ed294e3fa8f826713595 *natmapt/files/lib/natmap/bin/logger
+7c597623c3435590d862969027ec79248365c1cb6e4a0fac7decd57952db8137 *natmapt/files/notify/Telegram
+85246175312ce5b726b5e06b7dd6c892baabc3fe5224cc3d92584b62013aec69 *natmapt/files/client/qBittorrent
+fa76e56c556436f4f9d3808090a3c21026636bfea8fd12e6f95f1274fe6d92f7 *luci-app-natmap/htdocs/luci-static/resources/view/natmap.js
+03db33dfbc0fdcc9775fc5b98a78836347059f3e7438b8de6e61e04928c57d80 *luci-app-natmap/htdocs/luci-static/resources/view/natmap/log.js
+5e9ff71f9676d204a5067cf3144b933064e4c8998fa2f06f81c4191aca34b2e5 *luci-app-natmap/htdocs/luci-static/resources/view/status/include/72_natmap.js
+2f9c3111f67a5fbf35de6468ba87e3a85f8a9a95be4a6765c27733957d05fb79 *luci-app-natmap/root/usr/share/luci/menu.d/luci-app-natmap.json
+59866de4b7304deeecc7ff41dd72b50b8098f85e022a2a9c12800aef3d9c8c37 *luci-app-natmap/root/usr/share/rpcd/acl.d/luci-app-natmap.json
