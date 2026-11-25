@@ -27,26 +27,23 @@ on:
         type: boolean
         default: true
 
+      ci_packages:
+        description: '临时编译包（空格分隔，例如：luci -dnsmasq）'
+        required: false
+        default: ''
+      ci_repos:
+        description: '临时插件地址（空格分隔，自动扫描）'
+        required: false
+        default: ''
+
       ssh_sync:
         description: '开启 VPS 私人同步'
         type: boolean
         required: false
         default: false
-      vps_host:
-        description: 'VPS 地址 ( 必须IPv4地址/域名 )'
-        required: false
-        default: 'amd.899957.xyz'
-      vps_user:
-        description: 'VPS 用户名'
-        required: false
-        default: 'root'
-      remote_path:
-        description: 'VPS 远程目录'
-        required: false
-        default: '/root/openwrt'
 
       refresh_honk_assets:
-        description: '刷新 honk 核心版本与 Doona 面板（会改写 Makefile / 面板文件，默认关闭）'
+        description: '刷新 honk 核心版本与 Doona 面板'
         required: false
         type: boolean
         default: false
@@ -146,9 +143,9 @@ jobs:
       if: inputs.ssh_sync == true
       env:
         SSH_KEY: ${{ secrets.VPS_PRIVATE_KEY }}  # 读取 Secret
-        VPS_HOST: ${{ inputs.vps_host }}
-        VPS_USER: ${{ inputs.vps_user }}
-        REMOTE_PATH: ${{ inputs.remote_path }}
+        VPS_HOST: 'amd.899957.xyz'
+        VPS_USER: 'root'
+        REMOTE_PATH: '/root/openwrt'
       run: |
         echo "=== 开始私人定制同步 ==="
         # 1. 配置 SSH Key
@@ -267,8 +264,20 @@ jobs:
 
     # ==================== 下载与同步插件 ====================
     - name: Download & Prepare Custom Packages
+      env:
+        CI_REPOS: ${{ inputs.ci_repos }}
       run: |
         mkdir -p openwrt/package/custom_repos
+
+        # 🔴 追加 workflow_dispatch 传入的仓库地址（空格分隔，自动识别 tree/普通仓库）
+        if [ -n "$CI_REPOS" ]; then
+          touch "$GITHUB_WORKSPACE/$REPO_LIST_FILE"
+          echo "" >> "$GITHUB_WORKSPACE/$REPO_LIST_FILE"
+          for repo_url in $CI_REPOS; do
+            echo "$repo_url" >> "$GITHUB_WORKSPACE/$REPO_LIST_FILE"
+            echo "  ➕ [Input Repo] $repo_url"
+          done
+        fi
 
         # 🔴 定义抓取函数 (支持稀疏检出 + Makefile 修复 + 自动记录)
         function git_sparse_clone() {
@@ -334,6 +343,8 @@ jobs:
 
     # ==================== 步骤 🔴 Makefile 修复路径与生成插件配置 ====================
     - name: Patch Makefiles & Generate Package Config
+      env:
+        CI_PACKAGES: ${{ inputs.ci_packages }}
       run: |
         # 1. Makefile 路径自动修复
         echo "Applying global patches to custom packages..."
@@ -401,6 +412,16 @@ jobs:
         done
         # 🧹 去重
         sort -u auto_packages.txt -o auto_packages.txt
+
+        # 🔴 2.5 追加 workflow_dispatch 传入的包列表（空格分隔，支持 -包名 禁用）
+        touch "$GITHUB_WORKSPACE/custom.config"
+        if [ -n "$CI_PACKAGES" ]; then
+          echo "" >> "$GITHUB_WORKSPACE/custom.config"
+          for pkg in $CI_PACKAGES; do
+            echo "$pkg" >> "$GITHUB_WORKSPACE/custom.config"
+            echo "  ➕ [Input Package] $pkg"
+          done
+        fi
 
         # 🔴 3. 处理 custom.config (支持 # CONFIG... is not set)
         CUSTOM_CONFIG_PATH="$GITHUB_WORKSPACE/custom.config"
@@ -676,13 +697,35 @@ jobs:
         echo "* Build Date: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
 
     - name: Upload to Release
-      uses: softprops/action-gh-release@v3
       if: inputs.upload_release == true && steps.organize.outputs.status == 'success'
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        body_path: release.txt
-        # 关键修改：指向加密后的目录
-        files: ${{ env.SECURE_DIR }}/*
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
+      run: |
+        set -e
+        TAG="$RELEASE_TAG"
+        REPO="${{ github.repository }}"
+
+        # 先同步 release 说明（原来由 action-gh-release 的 body_path 完成）
+        if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+          gh release edit "$TAG" --repo "$REPO" --notes-file release.txt
+          echo "✅ 已更新 release $TAG 的说明"
+        else
+          gh release create "$TAG" --repo "$REPO" --title "$TAG" --notes-file release.txt
+          echo "✅ 已创建 release $TAG"
+        fi
+
+        # gh CLI 走流式上传，不会像 Node action 那样把整包读进内存
+        ok=0
+        for i in 1 2 3; do
+          # shellcheck disable=SC2086
+          if gh release upload "$TAG" ${{ env.SECURE_DIR }}/*.7z --repo "$REPO" --clobber; then
+            ok=1
+            break
+          fi
+          echo "::warning::release 资产上传第 $i 次失败，15s 后重试"
+          sleep 15
+        done
+        [ "$ok" = 1 ] || { echo "::error::release 资产上传连续 3 次失败"; exit 1; }
+        echo "✅ release 资产上传完成"
 
