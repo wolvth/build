@@ -28,7 +28,7 @@ on:
         default: true
 
       ci_packages:
-        description: '临时编译包（空格分隔，例如：luci -dnsmasq）'
+        description: '临时编译包（空格分隔，luci -dnsmasq）'
         required: false
         default: ''
       ci_repos:
